@@ -180,6 +180,42 @@
           return (current.email||"").toLowerCase()===(ownerEmail||"").toLowerCase();
         }
 
+        // === Instrument management (ADMIN only) ===
+        function addInstrument(){
+          if(!user?.isAdmin) return;
+          const name = (prompt("Instrument name:")||"").trim(); if(!name) return;
+          const location = (prompt("Location (optional):")||"").trim();
+          const color = (prompt("Color (hex, e.g. #34d399):")||"#60a5fa").trim();
+          const maxStr = (prompt("Max minutes per booking (e.g. 120):")||"120").trim();
+          const maxMinutes = Math.max(15, parseInt(maxStr,10)||120);
+          const newItem = { id: uid(), name, location, color, maxMinutes };
+          setInstruments(prev => { const arr=[...prev, newItem]; return arr; });
+          setSelected(newItem.id);
+          setToast({t:"ok", m:"Instrument added."});
+        }
+
+        function editInstrument(){
+          if(!user?.isAdmin) return;
+          const cur = instruments.find(i=>i.id===selected); if(!cur) return;
+          const name = (prompt("Instrument name:", cur.name)||cur.name).trim();
+          const location = (prompt("Location:", cur.location||"")||cur.location||"").trim();
+          const color = (prompt("Color (hex):", cur.color||"#60a5fa")||cur.color||"#60a5fa").trim();
+          const maxStr = (prompt("Max minutes per booking:", String(cur.maxMinutes||120))||String(cur.maxMinutes||120)).trim();
+          const maxMinutes = Math.max(15, parseInt(maxStr,10)||120);
+          setInstruments(prev => prev.map(i => i.id===cur.id ? {...i, name, location, color, maxMinutes} : i));
+          setToast({t:"ok", m:"Instrument updated."});
+        }
+
+        function deleteInstrument(){
+          if(!user?.isAdmin) return;
+          const cur = instruments.find(i=>i.id===selected); if(!cur) return;
+          if(!confirm(`Delete instrument "${cur.name}" and all its bookings?`)) return;
+          setInstruments(prev => prev.filter(i=>i.id!==cur.id));
+          setReservations(prev => prev.filter(r=>r.instrumentId!==cur.id));
+          setSelected(d=> (instruments.find(i=>i.id!==cur.id)?.id) || "");
+          setToast({t:"ok", m:"Instrument deleted."});
+        }
+
         // bookings
         function addReservation(r){
           if(!user) return setToast({t:'error',m:'Please sign in first.'});
@@ -264,19 +300,6 @@
           setToast({t:"ok",m:"Password reset. Please sign in with the new password."});
         }
 
-        async function grantAdmin(){
-          if(!user?.isAdmin) return;
-          const target = String(prompt("Email to grant admin:")||"").trim().toLowerCase(); if(!target) return;
-          const r = await apiSetAdmin(user.email, target, true);
-          setToast({ t: r.ok ? "ok" : "error", m: r.ok ? "Granted admin." : "Failed to grant admin." });
-        }
-        async function revokeAdmin(){
-          if(!user?.isAdmin) return;
-          const target = String(prompt("Email to revoke admin:")||"").trim().toLowerCase(); if(!target) return;
-          const r = await apiSetAdmin(user.email, target, false);
-          setToast({ t: r.ok ? "ok" : "error", m: r.ok ? "Revoked admin." : "Failed to revoke admin." });
-        }
-
         // UI (week view only)
         const hours = Array.from({length:24},(_,i)=>i); // 00..23
         const weekdays = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -298,8 +321,9 @@
                       <span className="text-sm text-slate-600">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
                       {user.isAdmin && (
                         <>
-                          <button className="px-3 py-1 border rounded" onClick={grantAdmin}>Grant admin</button>
-                          <button className="px-3 py-1 border rounded" onClick={revokeAdmin}>Revoke admin</button>
+                          <button className="px-3 py-1 border rounded" onClick={addInstrument} title="Add instrument">Add</button>
+                          <button className="px-3 py-1 border rounded" onClick={editInstrument} title="Edit selected instrument">Edit</button>
+                          <button className="px-3 py-1 border rounded" onClick={deleteInstrument} title="Delete selected instrument">Delete</button>
                         </>
                       )}
                       <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>

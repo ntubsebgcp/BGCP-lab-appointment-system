@@ -4,22 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>蕭友晉老師實驗室儀器預約系統</title>
-    <!-- Tailwind (CDN) -->
+    <!-- Tailwind -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React 18 UMD -->
+    <!-- React 18 -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel Standalone for JSX transform in the browser -->
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-      html, body, #root { height: 100%; }
-    </style>
+    <style>html, body, #root { height: 100%; }</style>
   </head>
   <body class="bg-slate-50">
     <div id="root"></div>
-    <script type="text/babel" data-presets="env,react">
-      // app.jsx will be inlined here if not found; we will load as external below.
-    </script>
     <script type="text/babel" data-presets="env,react" src="./app.jsx"></script>
   </body>
 </html>

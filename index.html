@@ -18,7 +18,7 @@
       // 你提供的 GAS URL（可用網址參數 ?gas= 覆蓋）
       const GAS_WEBAPP_URL =
         new URL(location.href).searchParams.get("gas") ||
-        "https://script.google.com/macros/s/AKfycbwAhInybUQaazt1T_LmiLtDhdDfIo8WAC2e17pCFDDV-AR4Qg9m_KBWjg-MsStOFN5lig/exec";
+        "https://script.googleusercontent.com/macros/echo?user_content_key=AehSKLi6NgNBlVWfi0DJtEe9PZN5yQntYvQMYpgaP3LyfhofCieogdU70ENj6R0onPRbtaXaKMtgpxcuMd3ifs8OlCVuomuikBjmz6B8nX19D2HFKQ8VOUQ-tMASAJ87ySg6D3qk0fZRrcjL63JKR7jq6GIbB7KAuCs3hcXFJjncz3Oh6KJM8tAkAAQFXsyOLAt95qvy_bn26kFrwjo1pkfIM_MUhUTdmsvILimRMgKnPoQ0wm87Yw0_mjhFDNpny5GZpLOhoe4N35Xgd6g5iYHCFQIe_BHedtgUFLCxTejv&lib=MBqkAyoSla0_R3qlly_BJbM0j1OmJzjwb";
 
       const { useEffect, useMemo, useState } = React;
       const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);

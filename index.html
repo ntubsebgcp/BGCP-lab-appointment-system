@@ -34,14 +34,26 @@
       const m2t = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
       const isOverlap = (a1,a2,b1,b2)=>a1<b2 && b1<a2;
       const roundTo = (x, s=15)=>Math.round(x/s)*s;
-      const clampTo = (a,b,min=8*60,max=20*60)=>[Math.max(min,a), Math.min(max,b)];
       const load = (k,fb)=>{ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch(e){ return fb; } };
       const save = (k,v)=>localStorage.setItem(k, JSON.stringify(v));
       const ADMIN_WHITELIST = new Set(["renyi0128@gmail.com","yshiau@g.ntu.edu.tw"].map(s=>s.toLowerCase()));
 
+      // 24h day settings
+      const DAY_START_MIN = 0;           // 00:00
+      const DAY_END_MIN   = 24 * 60;     // 24:00
+      const ROW_H = 64;                  // px height per hour row
+      const clampTo = (a,b,min=DAY_START_MIN,max=DAY_END_MIN)=>[Math.max(min,a), Math.min(max,b)];
+
       function weakHash(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0).toString(16); }
-      function getWeekStart(date){ const d=new Date(date); const day=d.getDay(); const diff=(day===0?-6:1)-day; d.setDate(d.getDate()+diff); d.setHours(0,0,0,0); return d; }
-      function escICS(s){ return String(s).replace(/\\/g,"\\\\").replace(/\n/g,"\\n").replace(/,/g,"\\,").replace(/;/g,"\\;"); }
+
+      // Week starts on Sunday
+      function getWeekStart(date){
+        const d=new Date(date);
+        const day=d.getDay(); // 0=Sun
+        d.setDate(d.getDate()-day); // go back to Sunday
+        d.setHours(0,0,0,0);
+        return d;
+      }
 
       // --- crypto helpers ---
       async function sha256Hex(str){
@@ -56,8 +68,7 @@
         const url = GAS_WEBAPP_URL + "?action=getUser&email=" + encodeURIComponent(email);
         const res = await fetch(url, { method: "GET" });
         const json = await res.json().catch(()=>null);
-        console.log("[GAS getUser] 200 OK url=", url, "json=", json);
-        return json;
+        return json; // {email,name,salt,hash,isAdmin} or null
       }
 
       // --- GAS API: POST (use text/plain to avoid preflight) ---
@@ -71,7 +82,6 @@
           body: JSON.stringify({ action:"register", name, email, salt, hash })
         });
         const data = await res.json().catch(()=>null);
-        console.log("[GAS register] status=", res.status, "data=", data);
         if(!res.ok || !data || data.ok!==true) return { ok:false, reason:"gas-error", data };
         return { ok:true, isAdmin: !!data.isAdmin };
       }
@@ -133,6 +143,30 @@
         useEffect(()=>{ const clean=dedupeByEmail(users); save('lab_users_v1',clean); if(clean.length!==users.length) setUsers(clean); },[users]);
         useEffect(()=>{ if(!instruments.find(i=>i.id===selected)) setSelected(instruments[0]?.id||''); },[instruments,selected]);
 
+        // 🔒 Auto-verify session against GAS (kick out if backend deleted/disabled)
+        useEffect(() => {
+          async function verify() {
+            if (!user?.email) return;
+            try {
+              const s = await apiGetUserFromSheet(user.email);
+              if (!s || !s.salt || !s.hash) {
+                setUser(null);
+                setToast({ t: "error", m: "Your account was disabled. Please contact the admin." });
+              }
+            } catch (e) { /* ignore transient errors */ }
+          }
+          verify();
+          const id = setInterval(verify, 60_000);
+          const onFocus = () => verify();
+          window.addEventListener("focus", onFocus);
+          document.addEventListener("visibilitychange", onFocus);
+          return () => {
+            clearInterval(id);
+            window.removeEventListener("focus", onFocus);
+            document.removeEventListener("visibilitychange", onFocus);
+          };
+        }, [user]);
+
         // view data
         const weekDates=useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
         const filtered=useMemo(()=>reservations.filter(r=>selected? r.instrumentId===selected: false).sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start)),[reservations,selected]);
@@ -164,31 +198,31 @@
         }
         function onCalendarClick({dateISO,yRatio}){
           if(!selected) return setToast({t:'error',m:'Please select an instrument.'});
-          const minutesFrom8=Math.floor(12*60*yRatio);
-          let s=roundTo(8*60+minutesFrom8,15), e=s+60; [s,e]=clampTo(s,e);
+          const minutesFromStart = Math.floor((DAY_END_MIN - DAY_START_MIN) * yRatio); // 0..1440
+          let s=roundTo(DAY_START_MIN + minutesFromStart,15), e=s+60;
+          [s,e]=clampTo(s,e);
           setQuick({date:dateISO,start:m2t(s),end:m2t(e)});
         }
 
         // account ops
         async function register(){
-  	  const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
-  	  const email = emailRaw.trim().toLowerCase();
-  	  const name = (prompt("Name:") || email.split("@")[0]).trim();
-  	  const password = (prompt("Set password:") || "admin").trim();
+          const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
+          const email = emailRaw.trim().toLowerCase();
+          const name = (prompt("Name:") || email.split("@")[0]).trim();
+          const password = (prompt("Set password:") || "admin").trim();
 
-  	  const gas = await apiRegisterToSheet({ name, email, password });
-  	  if (!gas.ok) { setToast({ t:"error", m:"Failed to write to Google Sheet." }); return; }
+          const gas = await apiRegisterToSheet({ name, email, password });
+          if (!gas.ok) { setToast({ t:"error", m:"Failed to write to Google Sheet." }); return; }
 
-  	  // Save to local list, but DO NOT auto sign-in
-  	  const rec = { id: uid(), email, name, hash: weakHash(password), isAdmin: !!gas.isAdmin || ADMIN_WHITELIST.has(email) };
-  	  setUsers(prev => [...prev.filter(u=>u.email!==email), rec]);
+          // Save to local list, but DO NOT auto sign-in
+          const rec = { id: uid(), email, name, hash: weakHash(password), isAdmin: !!gas.isAdmin || ADMIN_WHITELIST.has(email) };
+          setUsers(prev => [...prev.filter(u=>u.email!==email), rec]);
 
-  	  // Ensure no session after registration
-  	  setUser(null);
+          // Ensure no session after registration
+          setUser(null);
 
-  	  // ✔ Show your message
-  	  setToast({ t:"ok", m:"Registration successful. Please sign in." });
-	}
+          setToast({ t:"ok", m:"Registration successful. Please sign in." });
+        }
 
         async function login(){
           const email = String(prompt("Email:")||"").trim().toLowerCase();
@@ -202,6 +236,8 @@
                 const calc = await sha256Hex(password + ":" + s.salt);
                 if (calc !== s.hash) { setToast({t:"error",m:"Email or password incorrect (GAS)."}); return; }
                 isAdminFlag = !!s.isAdmin;
+              } else {
+                setToast({t:"error",m:"Email or password incorrect (GAS)."}); return;
               }
             } catch(e){}
           }
@@ -241,25 +277,9 @@
           setToast({ t: r.ok ? "ok" : "error", m: r.ok ? "Revoked admin." : "Failed to revoke admin." });
         }
 
-        // export ICS
-        function exportICS(res){
-          const dtS=res.date.replace(/-/g,'')+'T'+res.start.replace(':','')+'00';
-          const dtE=res.date.replace(/-/g,'')+'T'+res.end.replace(':','')+'00';
-          const lines=[
-            "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Lab Booking//EN","BEGIN:VEVENT",
-            `UID:${res.id}@lab-booking`,`DTSTAMP:${dtS}Z`,`DTSTART:${dtS}`,`DTEND:${dtE}`,
-            `SUMMARY:${escICS(res.title|| (instr?.name||'Instrument')+' booking')}`,
-            `DESCRIPTION:${escICS('User: '+res.user+'\\nEmail: '+(res.email||'')+'\\nNotes: '+(res.notes||''))}`,
-            `LOCATION:${escICS(instr?.location||'Lab')}`,"END:VEVENT","END:VCALENDAR"
-          ].join("\\n");
-          const a=document.createElement('a');
-          a.href=URL.createObjectURL(new Blob([lines],{type:'text/calendar'}));
-          a.download=`${instr?.name||'instrument'}-${res.date}-${res.start}.ics`; a.click();
-        }
-
         // UI (week view only)
-        const hours=Array.from({length:13},(_,i)=>8+i);
-        const weekdays = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+        const hours = Array.from({length:24},(_,i)=>i); // 00..23
+        const weekdays = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
         return (
           <div className="min-h-screen">
@@ -295,7 +315,9 @@
                 <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2 text-sm">
                   <div className="flex items-center rounded-xl border overflow-hidden">
                     <button onClick={()=>setWeekStart(d=>new Date(d.getTime()-7*86400000))} className="px-3 py-1 hover:bg-slate-100">← Prev</button>
-                    <div className="px-3 py-1 text-sm bg-slate-50 border-x">{fmtDate(weekStart)} ~ {fmtDate(new Date(weekStart.getTime()+6*86400000))}</div>
+                    <div className="px-3 py-1 text-sm bg-slate-50 border-x">
+                      {fmtDate(weekStart)} ~ {fmtDate(new Date(weekStart.getTime()+6*86400000))}
+                    </div>
                     <button onClick={()=>setWeekStart(d=>new Date(d.getTime()+7*86400000))} className="px-3 py-1 hover:bg-slate-100">Next →</button>
                     <button onClick={()=>setWeekStart(getWeekStart(new Date()))} className="px-3 py-1 hover:bg-slate-100">This week</button>
                   </div>
@@ -316,26 +338,34 @@
                 </div>
                 <div className="grid grid-cols-8 text-sm">
                   <div className="border-r bg-slate-50 select-none">
-                    {hours.map(h=><div key={h} className="h-16 border-t px-2 py-1 text-right text-slate-500">{String(h).padStart(2,'0')}:00</div>)}
+                    {hours.map(h=>(
+                      <div key={h} className="h-[64px] border-t px-2 py-1 text-right text-slate-500">
+                        {String(h).padStart(2,'0')}:00
+                      </div>
+                    ))}
                   </div>
                   {weekDates.map((d,idx)=>{
                     const dateISO=fmtDate(d);
                     const list=mapByDate[dateISO]||[];
                     return (
                       <div key={idx} className="border-l relative cursor-crosshair" onClick={(e)=>{
-                        const rect=e.currentTarget.getBoundingClientRect(); const y=e.clientY-rect.top; const ratio=Math.max(0,Math.min(1,y/rect.height)); onCalendarClick({dateISO,yRatio:ratio});
+                        const rect=e.currentTarget.getBoundingClientRect();
+                        const y=e.clientY-rect.top;
+                        const ratio=Math.max(0,Math.min(1,y/rect.height));
+                        onCalendarClick({dateISO,yRatio:ratio});
                       }}>
-                        {hours.map((_,i)=><div key={i} className="h-16 border-t"></div>)}
+                        {hours.map((_,i)=><div key={i} className="h-[64px] border-t"></div>)}
                         <div className="absolute inset-0">
                           {list.map(r=>{
-                            const top=((t2m(r.start)-8*60)/60)*64; const h=((t2m(r.end)-t2m(r.start))/60)*64;
+                            const top = ((t2m(r.start)-DAY_START_MIN)/60)*ROW_H;
+                            const h   = ((t2m(r.end)-t2m(r.start))/60)*ROW_H;
                             return (
                               <div key={r.id} className="absolute rounded-xl text-xs text-white p-1"
                                 style={{top:Math.max(0,top),height:Math.max(24,h),left:4,right:4,background:instr?.color}}>
                                 <div className="font-semibold truncate">{r.title||'Booked'}</div>
                                 <div>{r.start}–{r.end} · {r.user}</div>
                                 <div className="mt-1 flex gap-1">
-                                    <button className="px-2 py-0.5 border rounded bg-white/20" onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id);}}>Delete</button>
+                                  <button className="px-2 py-0.5 border rounded bg-white/20" onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id);}}>Delete</button>
                                 </div>
                               </div>
                             );

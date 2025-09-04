@@ -18,7 +18,7 @@
       // 你提供的 GAS URL（可用網址參數 ?gas= 覆蓋）
       const GAS_WEBAPP_URL =
         new URL(location.href).searchParams.get("gas") ||
-        "https://script.google.com/macros/s/AKfycbyoTc9NycIX5fPDigwC_6bFSOaCZ2eZqcz69sJWHk0DRgZMeGTEYFpsftfZmFW9DSqaYg/exec";
+        "https://script.google.com/macros/s/AKfycbwAhInybUQaazt1T_LmiLtDhdDfIo8WAC2e17pCFDDV-AR4Qg9m_KBWjg-MsStOFN5lig/exec";
 
       const { useEffect, useMemo, useState } = React;
       const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -45,10 +45,24 @@
       function randomSalt(n=16){const a=new Uint8Array(n);crypto.getRandomValues(a);return [...a].map(b=>b.toString(16).padStart(2,"0")).join("");}
 
       async function apiGetUserFromSheet(email){
-        if(!GAS_WEBAPP_URL) return null;
-        const res = await fetch(GAS_WEBAPP_URL + "?action=getUser&email=" + encodeURIComponent(email));
-        if (!res.ok) return null;
-        return res.json().catch(()=>null);
+  	if(!GAS_WEBAPP_URL) return null;
+  	const url = GAS_WEBAPP_URL + "?action=getUser&email=" + encodeURIComponent(email);
+  	try {
+    	  const res = await fetch(url, { method: "GET" });
+    	  let payload = null;
+    	  // 如果不是 2xx，嘗試讀文字幫你看錯
+   	  if (!res.ok) {
+      	    const text = await res.text().catch(()=>"(no body)");
+            console.log("[GAS getUser] HTTP", res.status, "url=", url, "body=", text);
+            return null;
+          }
+    	  payload = await res.json().catch(()=>null);
+    	  console.log("[GAS getUser] 200 OK url=", url, "json=", payload);
+    	  return payload;
+        } catch (e) {
+          console.log("[GAS getUser] network error:", e);
+          return null;
+        }
       }
       async function apiRegisterToSheet({name,email,password}){
         if(!GAS_WEBAPP_URL) return {ok:false, reason:"no-gas-url"};
@@ -59,6 +73,7 @@
           body: JSON.stringify({ action:"register", name, email, salt, hash })
         });
         const data = await res.json().catch(()=>null);
+	console.log("[GAS register] status=", res.status, "data=", data); // <--- 加這行
         if(!res.ok || !data || data.ok!==true) return { ok:false, reason:"gas-error", data };
         return { ok:true, isAdmin: !!data.isAdmin };
       }
@@ -174,6 +189,7 @@
           if (GAS_WEBAPP_URL) {
             try {
               const s = await apiGetUserFromSheet(email);
+	      console.log("[login] getUser payload =", s);
               if (s && s.salt && s.hash) {
                 const calc = await sha256Hex(password + ":" + s.salt);
                 if (calc !== s.hash) { setToast({t:"error",m:"帳號或密碼錯誤（GAS）"}); return; }

@@ -1,450 +1,372 @@
 <!doctype html>
-<html lang="en-GB"> <!-- en-GB 會讓 <input type="time"> 以 24h 顯示 -->
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BGCP_lab appointment system</title>
-
-    <!-- UI libs -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
     <style>
       html, body, #root { height: 100%; }
-      /* 更清楚的點按區域 */
-      .cell-hr { height: 64px; } /* 每小時行高 */
-      @media (max-width: 640px) {
-        .cell-hr { height: 56px; }
-      }
     </style>
   </head>
   <body class="bg-slate-50">
     <div id="root"></div>
 
     <script type="text/babel" data-presets="env,react">
-      /***** ==== Config ==== *****/
-      const GAS_WEBAPP_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbyaWUAINVk-MhjDlpEmf1gJVRPI_9-kh1U7HrtwY5Llu6jhgrZmB-1jOxvgAmZY8y7lpg/exec"; // ← 換成你「最新部署」的 Web App URL
-      const GAS_WEBAPP_URL =
-        new URL(location.href).searchParams.get("gas") || GAS_WEBAPP_URL_DEFAULT;
+/** ===== Config ===== **/
+const GAS_WEBAPP_URL =
+  new URL(location.href).searchParams.get("gas") ||
+  "<<<https://script.google.com/macros/s/AKfycbzftovC8HNjMAyy_vC1oSZidLdAjH1rBO8ckmKluRuBEQO6O-4i6EczM_a4woztISsvCA/exec>>>";
 
-      const { useEffect, useMemo, useState } = React;
+const { useEffect, useMemo, useState } = React;
 
-      /***** ==== utils ==== *****/
-      const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
-      const t2m = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60 + (m||0); };
-      const m2t = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
-      const roundTo = (x, s=15) => Math.round(x/s)*s;
-      const clampTo = (a,b,min=0,max=24*60)=>[Math.max(min,a),Math.min(max,b)];
-      const isOverlap = (a1,a2,b1,b2)=>a1<b2 && b1<a2;
-      function getWeekStart(date){
-        const d = new Date(date);
-        d.setDate(d.getDate() - d.getDay()); // 回到星期日
-        d.setHours(0,0,0,0);
-        return d;
-      }
-      // crypto for users
-      async function sha256Hex(str){
-        const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-        return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
-      }
-      function randomSalt(n=16){ const a=new Uint8Array(n); crypto.getRandomValues(a); return [...a].map(b=>b.toString(16).padStart(2,"0")).join(""); }
+/** ===== utils ===== **/
+const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
+const fmtDate=(d)=>{d=new Date(d);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
+const m2t=(m)=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+const roundTo=(x,s=15)=>Math.round(x/s)*s;
+const DAY_START_MIN=0, DAY_END_MIN=24*60, ROW_H=64;
+const clampTo=(a,b,min=DAY_START_MIN,max=DAY_END_MIN)=>[Math.max(min,a),Math.min(max,b)];
 
-      /***** ==== GAS API ==== *****/
-      // Users
-      async function apiPing(){
-        const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","ping");
-        try { const r = await fetch(u); return r.json(); } catch{ return null; }
-      }
-      async function apiGetUserFromSheet(email){
-        const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","getUser"); u.searchParams.set("email", email);
-        const res = await fetch(u); return res.json().catch(()=>null);
-      }
-      async function apiRegisterToSheet({name,email,password}){
-        const salt = randomSalt();
-        const hash = await sha256Hex(password + ":" + salt);
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST",
-          headers: {"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"register", name, email, salt, hash })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
-      async function apiRequestReset(email){
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"request_reset", email })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
-      async function apiConfirmReset(email, code, newPassword){
-        const newSalt = randomSalt();
-        const newHash = await sha256Hex(newPassword + ":" + newSalt);
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"confirm_reset", email, code, newSalt, newHash })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
+// ⛑️ 強韌的 time→minutes：可吃 Date、ISO、或 "HH:MM"
+function t2m(t){
+  if (t instanceof Date) return t.getHours()*60 + t.getMinutes();
+  const s = String(t).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/); // 優先抓 HH:MM
+  if (m) return (+m[1])*60 + (+m[2]);
+  // ISO 也容忍
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getHours()*60 + d.getMinutes();
+  return NaN;
+}
 
-      // Instruments
-      async function apiListInstruments(){
-        const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","list_instruments");
-        const res = await fetch(u); return res.json().catch(()=>[]);
-      }
-      async function apiUpsertInstrument(requester, instrument){ // 只用 name
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"upsert_instrument", requester, instrument })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
-      async function apiDeleteInstrument(requester, id){
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"delete_instrument", requester, id })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
+function getWeekStart(date){const d=new Date(date);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);return d;}
+function weakHash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
 
-      // Reservations
-      async function apiListReservations(fromISO,toISO,instrumentId){
-        const u = new URL(GAS_WEBAPP_URL);
-        u.searchParams.set("action","list_reservations");
-        u.searchParams.set("from", fromISO);
-        u.searchParams.set("to",   toISO);
-        if(instrumentId) u.searchParams.set("instrumentId", instrumentId);
-        const res = await fetch(u); return res.json().catch(()=>[]);
-      }
-      async function apiCreateReservation(requester,resv){
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"create_reservation", requester, res:resv })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
-      async function apiDeleteReservation(requester,id){
-        const res = await fetch(GAS_WEBAPP_URL, {
-          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-          body: JSON.stringify({ action:"delete_reservation", requester, id })
-        });
-        return res.json().catch(()=>({ok:false}));
-      }
+/** ===== crypto for users ===== **/
+async function sha256Hex(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("")}
+function randomSalt(n=16){const a=new Uint8Array(n);crypto.getRandomValues(a);return [...a].map(b=>b.toString(16)).join("")}
 
-      /***** ==== App ==== *****/
-      function App(){
-        // UI state
-        const [instruments,setInstruments] = useState([]);
-        const [selected,setSelected]       = useState("");
-        const [reservations,setReservations] = useState([]);
-        const [weekStart,setWeekStart]     = useState(getWeekStart(new Date()));
-        const [toast,setToast]             = useState(null);
-        const [quick,setQuick]             = useState(null); // {date,start,end,user?}
-        const [user,setUser]               = useState(null);
+/** ===== GAS API ===== **/
+// Users
+async function apiGetUserFromSheet(email){
+  const url = GAS_WEBAPP_URL + "?action=getUser&email=" + encodeURIComponent(email);
+  const res = await fetch(url); return res.json().catch(()=>null);
+}
+async function apiRegisterToSheet({name,email,password}){
+  const salt=randomSalt(); const hash=await sha256Hex(password+":"+salt);
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"register",name,email,salt,hash})});
+  return res.json().catch(()=>({ok:false}));
+}
+async function apiRequestReset(email){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"request_reset",email})});
+  return res.json().catch(()=>({ok:false}));
+}
+async function apiConfirmReset(email,code,newPassword){
+  const newSalt=randomSalt(); const newHash=await sha256Hex(newPassword+":"+newSalt);
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"confirm_reset",email,code,newSalt,newHash})});
+  return res.json().catch(()=>({ok:false}));
+}
+async function apiSetAdmin(requester,target,isAdmin){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"set_admin",requester,target,isAdmin})});
+  return res.json().catch(()=>({ok:false}));
+}
 
-        // derived
-        const weekDates = useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
-        const weekRange = useMemo(()=>({from:fmtDate(weekStart), to:fmtDate(new Date(weekStart.getTime()+6*86400000))}),[weekStart]);
-        const weekdays  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        const hours     = Array.from({length:24},(_,i)=>i);
+// Instruments
+async function apiListInstruments(){
+  const url=GAS_WEBAPP_URL+"?action=list_instruments";
+  const res=await fetch(url); return res.json().catch(()=>[]);
+}
+async function apiUpsertInstrument(requester, instrument){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"upsert_instrument",requester,instrument})});
+  return res.json().catch(()=>({ok:false}));
+}
+async function apiDeleteInstrument(requester, id){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"delete_instrument",requester,id})});
+  return res.json().catch(()=>({ok:false}));
+}
 
-        // load data
-        async function loadInstruments(){
-          const data = await apiListInstruments();
-          setInstruments(Array.isArray(data)?data:[]);
-          if(!selected && Array.isArray(data) && data.length) setSelected(data[0].id);
-        }
-        async function loadReservations(){
-          const data = await apiListReservations(weekRange.from, weekRange.to, null);
-          setReservations(Array.isArray(data)?data:[]);
-        }
+// Reservations
+async function apiListReservations(fromISO,toISO,instrumentId){
+  const u=new URL(GAS_WEBAPP_URL);
+  u.searchParams.set("action","list_reservations");
+  u.searchParams.set("from",fromISO);
+  u.searchParams.set("to",toISO);
+  if(instrumentId) u.searchParams.set("instrumentId",instrumentId);
+  const res=await fetch(u); return res.json().catch(()=>[]);
+}
+async function apiCreateReservation(requester,resv){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"create_reservation",requester,res:resv})});
+  return res.json().catch(()=>({ok:false}));
+}
+async function apiDeleteReservation(requester,id){
+  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"delete_reservation",requester,id})});
+  return res.json().catch(()=>({ok:false}));
+}
 
-        useEffect(()=>{ loadInstruments(); },[]);
-        useEffect(()=>{ loadReservations(); },[weekRange.from, weekRange.to]);
+/** ===== App ===== **/
+function App(){
+  const [instruments,setInstruments]=useState([]);
+  const [selected,setSelected]=useState("");
+  const [reservations,setReservations]=useState([]);
+  const [weekStart,setWeekStart]=useState(getWeekStart(new Date()));
+  const [toast,setToast]=useState(null);
+  const [quick,setQuick]=useState(null);
+  const [user,setUser]=useState(null);
 
-        const mapByDate = useMemo(()=>{
-          const m = {};
-          for(const r of reservations){
-            (m[r.date]=m[r.date]||[]).push(r);
-          }
-          for(const k in m) m[k].sort((a,b)=>a.start.localeCompare(b.start));
-          return m;
-        },[reservations]);
+  const weekDates=useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
+  const weekRange=useMemo(()=>({from:fmtDate(weekStart), to:fmtDate(new Date(weekStart.getTime()+6*86400000))}),[weekStart]);
+  const weekdays=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const instr = instruments.find(i=>i.id===selected)||null;
 
-        // auth
-        async function register(){
-          const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
-          const email = emailRaw.trim().toLowerCase();
-          const name  = (prompt("Name:") || email.split("@")[0]).trim();
-          const pw    = (prompt("Set password:") || "admin").trim();
-          const r = await apiRegisterToSheet({name,email,password:pw});
-          if(!r?.ok){ setToast({t:"error",m:"Failed to write to Google Sheet."}); return; }
-          setUser(null);
-          setToast({t:"ok",m:"Registration successful. Please sign in."});
-        }
-        async function login(){
-          const email = String(prompt("Email:")||"").trim().toLowerCase();
-          const pw    = String(prompt("Password:")||"").trim();
-          const s = await apiGetUserFromSheet(email);
-          if(!s || !s.salt || !s.hash){ setToast({t:"error",m:"Email or password incorrect."}); return; }
-          const calc = await sha256Hex(pw+":"+s.salt);
-          if(calc !== s.hash){ setToast({t:"error",m:"Email or password incorrect."}); return; }
-          setUser({email, name:s.name||email.split("@")[0], isAdmin: !!s.isAdmin});
-          setToast({t:"ok",m:"Signed in."});
-        }
-        function logout(){ setUser(null); }
-        async function forgotPassword(){
-          const email = String(prompt("Enter your email:")||"").trim().toLowerCase(); if(!email) return;
-          const r1 = await apiRequestReset(email); if(!r1?.ok){ setToast({t:"error",m:"Failed to send verification code."}); return; }
-          const code = String(prompt("Enter the 6-digit code sent to your email:")||"").trim(); if(!code) return;
-          const newPass = String(prompt("New password:")||"").trim(); if(!newPass) return;
-          const r2 = await apiConfirmReset(email, code, newPass); if(!r2?.ok){ setToast({t:"error",m:"Code invalid or expired."}); return; }
-          setToast({t:"ok",m:"Password reset. Please sign in with the new password."});
-        }
+  async function loadInstruments(){
+    const data=await apiListInstruments();
+    setInstruments(data||[]);
+    if(!selected && data?.length) setSelected(data[0].id);
+  }
+  async function loadReservations(){
+    const data=await apiListReservations(weekRange.from,weekRange.to, selected || "");
+    setReservations(Array.isArray(data)?data:[]);
+  }
+  useEffect(()=>{ loadInstruments(); },[]);
+  useEffect(()=>{ if(selected) loadReservations(); },[weekRange.from,weekRange.to, selected]);
 
-        // bookings
-        async function addReservation(r){
-          if(!user) return setToast({t:"error",m:"Please sign in first."});
-          const payload = {
-            instrumentId: selected,
-            date: r.date, start: r.start, end: r.end,
-            userEmail: user.email, userName: r.user || user.name
-          };
-          const res = await apiCreateReservation(user.email, payload);
-          if(!res?.ok){
-            const msg = res?.reason==="conflict" ? "Time conflict. Pick another slot." : "Failed to write to Google Sheet.";
-            setToast({t:"error",m:msg}); return;
-          }
-          await loadReservations();
-          setQuick(null);
-          setToast({t:"ok",m:"Booking created."});
-        }
-        async function removeReservation(id){
-          if(!user) return;
-          const r = await apiDeleteReservation(user.email, id);
-          if(!r?.ok){ setToast({t:"error",m:"Delete failed."}); return; }
-          await loadReservations();
-          setToast({t:"ok",m:"Booking removed."});
-        }
-        function onCalendarClick({dateISO,yRatio}){
-          if(!selected) return setToast({t:"error",m:"Please select an instrument."});
-          const minutesFromStart = Math.floor((24*60) * yRatio);
-          let s = roundTo(minutesFromStart, 15), e=s+60; [s,e]=clampTo(s,e);
-          setQuick({date:dateISO, start:m2t(s), end:m2t(e), user:(user?.name||"")});
-        }
+  const mapByDate=useMemo(()=>{
+    const m={};
+    for(const r of reservations){ (m[r.date]=m[r.date]||[]).push(r); }
+    for(const k in m) m[k].sort((a,b)=>t2m(a.start)-t2m(b.start));
+    return m;
+  },[reservations]);
 
-        // instruments (admin, only name)
-        async function onAddInstrument(){
-          if(!user?.isAdmin) return;
-          const name = prompt("Instrument name:"); if(!name) return;
-          const r = await apiUpsertInstrument(user.email, { name });
-          if(!r?.ok){ setToast({t:"error",m:"Failed to add instrument."}); return; }
-          await loadInstruments(); setToast({t:"ok",m:"Instrument added."});
-        }
-        async function onEditInstrument(){
-          if(!user?.isAdmin || !selected) return;
-          const current = instruments.find(i=>i.id===selected); if(!current) return;
-          const name = prompt("Instrument name:", current.name); if(!name) return;
-          const r = await apiUpsertInstrument(user.email, { id: current.id, name });
-          if(!r?.ok){ setToast({t:"error",m:"Failed to update instrument."}); return; }
-          await loadInstruments(); setToast({t:"ok",m:"Instrument updated."});
-        }
-        async function onDeleteInstrument(){
-          if(!user?.isAdmin || !selected) return;
-          const current = instruments.find(i=>i.id===selected); if(!current) return;
-          if(!confirm(`Delete instrument "${current.name}" and its reservations?`)) return;
-          const r = await apiDeleteInstrument(user.email, current.id);
-          if(!r?.ok){ setToast({t:"error",m:"Failed to delete instrument."}); return; }
-          await loadInstruments(); await loadReservations();
-          setSelected(prev => {
-            const list = instruments.filter(i=>i.id!==current.id);
-            return list[0]?.id || "";
-          });
-          setToast({t:"ok",m:"Instrument deleted."});
-        }
+  // Auth
+  async function register(){
+    const emailRaw=prompt("Register Email:"); if(!emailRaw) return;
+    const email=emailRaw.trim().toLowerCase();
+    const name=(prompt("Name:")||email.split("@")[0]).trim();
+    const password=(prompt("Set password:")||"admin").trim();
+    const r=await apiRegisterToSheet({name,email,password});
+    if(!r.ok){ setToast({t:"error",m:"Failed to write to Google Sheet."}); return; }
+    setUser(null);
+    setToast({t:"ok",m:"Registration successful. Please sign in."});
+  }
+  async function login(){
+    const email=String(prompt("Email:")||"").trim().toLowerCase();
+    const password=String(prompt("Password:")||"").trim();
+    const s=await apiGetUserFromSheet(email);
+    if(!s||!s.salt||!s.hash){ setToast({t:"error",m:"Email or password incorrect (GAS)."}); return; }
+    const calc=await sha256Hex(password+":"+s.salt);
+    if(calc!==s.hash){ setToast({t:"error",m:"Email or password incorrect (GAS)."}); return; }
+    setUser({email,name:s.name||email.split("@")[0],isAdmin:!!s.isAdmin});
+    setToast({t:"ok",m:"Signed in."});
+  }
+  function logout(){ setUser(null); }
+  async function forgotPassword(){
+    const email=String(prompt("Enter your email:")||"").trim().toLowerCase(); if(!email) return;
+    const r1=await apiRequestReset(email); if(!r1.ok){ setToast({t:"error",m:"Failed to send verification code."}); return; }
+    const code=String(prompt("Enter the 6-digit code sent to your email:")||"").trim(); if(!code) return;
+    const newPass=String(prompt("New password:")||"").trim(); if(!newPass) return;
+    const r2=await apiConfirmReset(email,code,newPass); if(!r2.ok){ setToast({t:"error",m:"Code invalid or expired."}); return; }
+    setToast({t:"ok",m:"Password reset. Please sign in with the new password."});
+  }
 
-        return (
-          <div className="min-h-screen">
-            {/* Header */}
-            <header className="bg-white border-b sticky top-0 z-40">
-              <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-bold mr-auto">BGCP_lab appointment system</h1>
+  // Bookings
+  async function addReservation(r){
+    if(!user) return setToast({t:"error",m:"Please sign in first."});
+    const payload={instrumentId:selected,date:r.date,start:r.start,end:r.end,userEmail:user.email,userName:user.name};
+    const res=await apiCreateReservation(user.email,payload);
+    if(!res.ok){
+      setToast({t:"error",m:res.reason==="conflict"?"Time conflict. Pick another slot.":"Failed to create."});
+      return;
+    }
+    await loadReservations();
+    setQuick(null);
+    setToast({t:"ok",m:"Booking created."});
+  }
+  async function removeReservation(id){
+    if(!user) return;
+    const res=await apiDeleteReservation(user.email,id);
+    if(!res.ok){ setToast({t:"error",m:"Delete failed."}); return; }
+    await loadReservations();
+    setToast({t:"ok",m:"Booking removed."});
+  }
+  function onCalendarClick({dateISO,yRatio}){
+    if(!selected) return setToast({t:"error",m:"Please select an instrument."});
+    const minutesFromStart=Math.floor((DAY_END_MIN-DAY_START_MIN)*yRatio);
+    let s=roundTo(DAY_START_MIN+minutesFromStart,15), e=s+60; [s,e]=clampTo(s,e);
+    setQuick({date:dateISO,start:m2t(s),end:m2t(e),user:user?.name||""});
+  }
 
-                {!user ? (
+  // Instruments (admin) — 只有 name
+  async function onAddInstrument(){
+    if(!user?.isAdmin) return;
+    const name=prompt("Instrument name:"); if(!name) return;
+    const r=await apiUpsertInstrument(user.email,{name});
+    if(!r.ok){ setToast({t:"error",m:"Failed to add instrument."}); return; }
+    await loadInstruments(); setToast({t:"ok",m:"Instrument added."});
+  }
+  async function onEditInstrument(){
+    if(!user?.isAdmin || !instr) return;
+    const name=prompt("Instrument name:", instr.name); if(!name) return;
+    const r=await apiUpsertInstrument(user.email,{id:instr.id,name});
+    if(!r.ok){ setToast({t:"error",m:"Failed to update."}); return; }
+    await loadInstruments(); setToast({t:"ok",m:"Instrument updated."});
+  }
+  async function onDeleteInstrument(){
+    if(!user?.isAdmin || !instr) return;
+    if(!confirm("Delete this instrument and its reservations?")) return;
+    const r=await apiDeleteInstrument(user.email,instr.id);
+    if(!r.ok){ setToast({t:"error",m:"Failed to delete."}); return; }
+    await loadInstruments(); await loadReservations(); setToast({t:"ok",m:"Instrument deleted."});
+  }
+
+  const hours=Array.from({length:24},(_,i)=>i);
+
+  return (
+    <div className="min-h-screen">
+      <header className="bg-white border-b sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2 flex-wrap">
+          <h1 className="text-xl font-bold">BGCP_lab appointment system</h1>
+
+          {/* 手機會自動換行 */}
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {!user ? (
+              <>
+                <button className="px-3 py-1 border rounded" onClick={register}>Register</button>
+                <button className="px-3 py-1 border rounded" onClick={login}>Sign in</button>
+                <button className="px-3 py-1 border rounded" onClick={forgotPassword}>Forgot password</button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-slate-600">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
+                {user.isAdmin && (
                   <>
-                    <button className="px-3 py-1 border rounded" onClick={register}>Register</button>
-                    <button className="px-3 py-1 border rounded" onClick={login}>Sign in</button>
-                    <button className="px-3 py-1 border rounded" onClick={forgotPassword}>Forgot password</button>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-sm text-slate-600">
-                      {user.name} · {user.email} {user.isAdmin && "(admin)"}
-                    </span>
-                    {user.isAdmin && (
-                      <div className="flex gap-2 flex-wrap">
-                        <button className="px-3 py-1 border rounded" onClick={onAddInstrument}>Add instrument</button>
-                        <button className="px-3 py-1 border rounded" onClick={onEditInstrument} disabled={!selected}>Edit</button>
-                        <button className="px-3 py-1 border rounded" onClick={onDeleteInstrument} disabled={!selected}>Delete</button>
-                      </div>
-                    )}
-                    <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>
+                    <button className="px-3 py-1 border rounded" onClick={onAddInstrument}>Add instrument</button>
+                    <button className="px-3 py-1 border rounded" onClick={onEditInstrument} disabled={!instr}>Edit</button>
+                    <button className="px-3 py-1 border rounded" onClick={onDeleteInstrument} disabled={!instr}>Delete</button>
                   </>
                 )}
-
-                <select
-                  className="px-2 py-1 border rounded w-full sm:w-auto"
-                  value={selected}
-                  onChange={e=>setSelected(e.target.value)}
-                >
-                  {instruments.map(i=>(
-                    <option key={i.id} value={i.id}>{i.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Week nav */}
-              <div className="bg-slate-50 border-t">
-                <div className="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center gap-2 text-sm">
-                  <div className="flex items-center rounded-xl border overflow-hidden">
-                    <button onClick={()=>setWeekStart(d=>new Date(d.getTime()-7*86400000))} className="px-3 py-1 hover:bg-slate-100">← Prev</button>
-                    <div className="px-3 py-1 text-sm bg-slate-50 border-x">
-                      {weekRange.from} ~ {weekRange.to}
-                    </div>
-                    <button onClick={()=>setWeekStart(d=>new Date(d.getTime()+7*86400000))} className="px-3 py-1 hover:bg-slate-100">Next →</button>
-                    <button onClick={()=>setWeekStart(getWeekStart(new Date()))} className="px-3 py-1 hover:bg-slate-100">This week</button>
-                  </div>
-                </div>
-              </div>
-            </header>
-
-            {/* Calendar */}
-            <main className="max-w-7xl mx-auto p-4">
-              <div className="bg-white border rounded-2xl overflow-hidden">
-                <div className="grid grid-cols-8 border-b bg-slate-50 text-sm">
-                  <div className="p-2 text-center text-slate-500">Time</div>
-                  {weekDates.map((d,idx)=>(
-                    <div key={idx} className="p-2 text-center font-medium">
-                      <div className="text-slate-500 text-xs">{weekdays[d.getDay()]}</div>
-                      <div>{fmtDate(d)}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-8 text-sm">
-                  {/* time column */}
-                  <div className="border-r bg-slate-50 select-none">
-                    {hours.map(h=>(
-                      <div key={h} className="cell-hr border-t px-2 py-1 text-right text-slate-500">
-                        {String(h).padStart(2,'0')}:00
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* days */}
-                  {weekDates.map((d,idx)=>{
-                    const dateISO = fmtDate(d);
-                    const list = (mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
-                    return (
-                      <div
-                        key={idx}
-                        className="border-l relative cursor-crosshair"
-                        onClick={(e)=>{
-                          const rect=e.currentTarget.getBoundingClientRect();
-                          const y=e.clientY-rect.top;
-                          const ratio=Math.max(0,Math.min(1,y/rect.height));
-                          onCalendarClick({dateISO,yRatio:ratio});
-                        }}
-                      >
-                        {hours.map((_,i)=><div key={i} className="cell-hr border-t"></div>)}
-                        <div className="absolute inset-0">
-                          {list.map(r=>{
-                            const top=((t2m(r.start))/60)*64;
-                            const h  =((t2m(r.end)-t2m(r.start))/60)*64;
-                            return (
-                              <div
-                                key={r.id}
-                                className="absolute rounded-xl text-xs text-white p-1"
-                                style={{top:Math.max(0,top),height:Math.max(24,h),left:4,right:4,background:"#8b5cf6"}}
-                              >
-                                <div className="font-semibold truncate">Booked</div>
-                                <div>{r.start}–{r.end} · {r.userName || (r.userEmail||"").split("@")[0]}</div>
-                                {user && (
-                                  <div className="mt-1">
-                                    <button
-                                      className="px-2 py-0.5 border rounded bg-white/20"
-                                      onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id);}}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </main>
-
-            {/* Quick create dialog */}
-            {quick && (
-              <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={()=>setQuick(null)}>
-                <div className="bg-white rounded-2xl w-full max-w-lg p-4" onClick={(e)=>e.stopPropagation()}>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold">New booking</h3>
-                    <button className="px-2 py-1 text-sm border rounded" onClick={()=>setQuick(null)}>Close</button>
-                  </div>
-                  <div className="space-y-3 text-sm">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs text-slate-600">Date</label>
-                        <input type="date" className="w-full px-2 py-1 border rounded" value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-xs text-slate-600">Start</label>
-                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
-                        </div>
-                        <div>
-                          <label className="text-xs text-slate-600">End</label>
-                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-600">User</label>
-                      <input className="w-full px-2 py-1 border rounded" value={quick.user||""} onChange={e=>setQuick({...quick,user:e.target.value})} />
-                    </div>
-                    <div className="pt-2 flex items-center gap-2">
-                      <button
-                        className="px-3 py-2 border rounded bg-slate-900 text-white disabled:opacity-50"
-                        onClick={()=> quick.user && addReservation({...quick})}
-                        disabled={!quick.user}
-                      >
-                        Create
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
+                <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>
+              </>
             )}
-
-            {/* Toast */}
-            {toast && (
-              <div className={`fixed bottom-4 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded ${toast.t==='ok'?'bg-emerald-600':'bg-rose-600'}`}>
-                {toast.m}
-              </div>
-            )}
+            <select className="px-2 py-1 border rounded max-w-full" value={selected} onChange={e=>setSelected(e.target.value)}>
+              {instruments.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
           </div>
-        );
-      }
+        </div>
 
-      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+        <div className="bg-slate-50 border-t">
+          <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2 text-sm">
+            <div className="flex items-center rounded-xl border overflow-hidden">
+              <button onClick={()=>setWeekStart(d=>new Date(d.getTime()-7*86400000))} className="px-3 py-1 hover:bg-slate-100">← Prev</button>
+              <div className="px-3 py-1 text-sm bg-slate-50 border-x">{weekRange.from} ~ {weekRange.to}</div>
+              <button onClick={()=>setWeekStart(d=>new Date(d.getTime()+7*86400000))} className="px-3 py-1 hover:bg-slate-100">Next →</button>
+              <button onClick={()=>setWeekStart(getWeekStart(new Date()))} className="px-3 py-1 hover:bg-slate-100">This week</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto p-4">
+        <div className="bg-white border rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-8 border-b bg-slate-50 text-sm">
+            <div className="p-2 text-center text-slate-500">Time</div>
+            {weekDates.map((d,idx)=>(
+              <div key={idx} className="p-2 text-center font-medium">
+                <div className="text-slate-500 text-xs">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]}</div>
+                <div>{fmtDate(d)}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-8 text-sm">
+            <div className="border-r bg-slate-50 select-none">
+              {hours.map(h=>(
+                <div key={h} className="h-[64px] border-t px-2 py-1 text-right text-slate-500">
+                  {String(h).padStart(2,'0')}:00
+                </div>
+              ))}
+            </div>
+
+            {weekDates.map((d,idx)=>{
+              const dateISO=fmtDate(d);
+              const list=(mapByDate[dateISO]||[]);
+              return (
+                <div key={idx} className="border-l relative cursor-crosshair" onClick={(e)=>{
+                  const rect=e.currentTarget.getBoundingClientRect(); const y=e.clientY-rect.top; const ratio=Math.max(0,Math.min(1,y/rect.height));
+                  onCalendarClick({dateISO,yRatio:ratio});
+                }}>
+                  {hours.map((_,i)=><div key={i} className="h-[64px] border-t"></div>)}
+                  <div className="absolute inset-0">
+                    {list.map(r=>{
+                      const top=((t2m(r.start)-DAY_START_MIN)/60)*ROW_H;
+                      const h=((t2m(r.end)-t2m(r.start))/60)*ROW_H;
+                      return (
+                        <div key={r.id} className="absolute rounded-xl text-xs text-white p-1"
+                          style={{top:Math.max(0,top),height:Math.max(24,h),left:4,right:4,background:'#8b5cf6'}}>
+                          <div className="font-semibold truncate">Booked</div>
+                          <div>{r.start}–{r.end} · {r.userName||r.userEmail?.split("@")[0]}</div>
+                          {user && (
+                            <div className="mt-1">
+                              <button className="px-2 py-0.5 border rounded bg-white/20"
+                                onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id);}}>
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </main>
+
+      {/* Quick create dialog */}
+      {quick && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={()=>setQuick(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg p-4" onClick={(e)=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2"><h3 className="font-semibold">New booking</h3><button className="px-2 py-1 text-sm border rounded" onClick={()=>setQuick(null)}>Close</button></div>
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className="text-xs text-slate-600">Date</label>
+                  <input type="date" className="w-full px-2 py-1 border rounded" value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-xs text-slate-600">Start</label>
+                    <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
+                  </div>
+                  <div><label className="text-xs text-slate-600">End</label>
+                    <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
+                  </div>
+                </div>
+              </div>
+              <div><label className="text-xs text-slate-600">User</label>
+                <input className="w-full px-2 py-1 border rounded" value={quick.user||""} onChange={e=>setQuick({...quick,user:e.target.value})} />
+              </div>
+              <div className="pt-2 flex items-center gap-2">
+                <button className="px-3 py-2 border rounded bg-slate-900 text-white"
+                  onClick={()=> quick.user && addReservation({...quick, user: quick.user})}
+                  disabled={!quick?.user}>
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (<div className={"fixed bottom-4 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded "+(toast.t==='ok'?'bg-emerald-600':'bg-rose-600')}>{toast.m}</div>)}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     </script>
   </body>
 </html>

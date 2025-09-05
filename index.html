@@ -2,13 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BGCP_lab appointment system</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>html, body, #root { height: 100%; }</style>
+    <style>
+      html, body, #root { height: 100%; }
+    </style>
   </head>
   <body class="bg-slate-50">
     <div id="root"></div>
@@ -16,7 +18,8 @@
     <script type="text/babel" data-presets="env,react">
 /** ===== Config ===== **/
 const GAS_WEBAPP_URL =
-  new URL(location.href).searchParams.get("gas") ||  "https://script.google.com/macros/s/AKfycbwbbtp50Tkbuz2hwxFjmRy2jTF-7Xuwu3PDfY79lTHQ2fawLN_TN_t2Eqf6jLuQUzVc6w/exec"; // ← 改成你的 Web App URL
+  new URL(location.href).searchParams.get("gas") ||
+  "https://script.google.com/macros/s/AKfycby2i61OY_kDq6NPqDob8NCXLyRgaxBFezX-l9veWxhTAQ-5Zdkxl7FS-l5xGHDhiE7RDA/exec"; // ← 替換成你的 Web App URL
 
 const { useEffect, useMemo, useState } = React;
 
@@ -31,6 +34,22 @@ const DAY_START_MIN=0, DAY_END_MIN=24*60, ROW_H=64;
 const clampTo=(a,b,min=DAY_START_MIN,max=DAY_END_MIN)=>[Math.max(min,a),Math.min(max,b)];
 function getWeekStart(date){const d=new Date(date);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);return d;}
 function weakHash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
+
+// 24h 正規化：避免瀏覽器顯示 AM/PM 造成後端不認得
+const normDate = (s) => String(s).trim().replaceAll('/', '-').slice(0, 10);
+const normTime = (s) => {
+  const t = String(s).replace(/[^\d:]/g, ''); // 去掉「上午/下午」等字
+  if (!t.includes(':')) return '';
+  const [hh, mm] = t.split(':');
+  return `${String(hh).padStart(2,'0').slice(0,2)}:${String(mm||'00').padStart(2,'0').slice(0,2)}`;
+};
+
+// 給沒有 color 的儀器一個可預期的顏色
+function colorFromId(id){
+  const palette = ['#7c3aed','#2563eb','#059669','#16a34a','#db2777','#ea580c','#0891b2'];
+  const n = [...String(id||'')].reduce((a,c)=>a+c.charCodeAt(0),0);
+  return palette[n % palette.length];
+}
 
 /** ===== crypto for users ===== **/
 async function sha256Hex(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("")}
@@ -160,44 +179,61 @@ function App(){
 
   // Bookings
   async function addReservation(r){
-    if(!user) return setToast({t:"error",m:"Please sign in first."});
-    const payload={instrumentId:selected,date:r.date,start:r.start,end:r.end,userEmail:user.email,userName:user.name};
+    if(!user) return setToast({t:'error',m:'Please sign in first.'});
+
+    const payload = {
+      instrumentId: selected,
+      date:  normDate(r.date),
+      start: normTime(r.start),
+      end:   normTime(r.end),
+      userEmail: user.email,
+      userName:  r.user || user.name || user.email.split('@')[0],
+    };
+    if(!payload.date || !payload.start || !payload.end){
+      return setToast({t:'error', m:'Please fill date, start and end.'});
+    }
+    if(payload.start >= payload.end){
+      return setToast({t:'error', m:'End time must be after start time.'});
+    }
+
     const res=await apiCreateReservation(user.email,payload);
-    if(!res.ok){ setToast({t:"error",m:res.reason==="conflict"?"Time conflict. Pick another slot.":"Failed to create."}); return; }
-    await loadReservations(); setToast({t:"ok",m:"Booking created."});
-  }
-  async function removeReservation(id, ownerEmail){
-    if(!user) return;
-    // 後端會再次檢查是否 admin 或建立者
-    const res=await apiDeleteReservation(user.email,id);
-    if(!res.ok){ setToast({t:"error",m:"Delete failed."}); return; }
-    await loadReservations(); setToast({t:"ok",m:"Booking removed."});
-  }
-  function onCalendarClick({dateISO,yRatio}){
-    if(!selected) return setToast({t:"error",m:"Please select an instrument."});
-    const minutesFromStart=Math.floor((DAY_END_MIN-DAY_START_MIN)*yRatio);
-    let s=roundTo(DAY_START_MIN+minutesFromStart,15), e=s+60; [s,e]=clampTo(s,e);
-    setQuick({date:dateISO,start:m2t(s),end:m2t(e)});
+    if(!res.ok){
+      const msg = res.reason === 'conflict'
+        ? 'Time conflict. Pick another slot.'
+        : `Failed to create${res.reason ? ' ('+res.reason+')' : ''}.`;
+      return setToast({t:'error', m: msg});
+    }
+    await loadReservations();
+    setQuick(null);
+    setToast({t:'ok',m:'Booking created.'});
   }
 
-  // Instruments (admin)
+  async function removeReservation(id){
+    if(!user) return;
+    const res=await apiDeleteReservation(user.email,id);
+    if(!res.ok){ setToast({t:'error',m:'Delete failed.'}); return; }
+    await loadReservations(); setToast({t:'ok',m:'Booking removed.'});
+  }
+
+  function onCalendarClick({dateISO,yRatio}){
+    if(!selected) return setToast({t:'error',m:'Please select an instrument.'});
+    const minutesFromStart=Math.floor((DAY_END_MIN-DAY_START_MIN)*yRatio);
+    let s=roundTo(DAY_START_MIN+minutesFromStart,15), e=s+60; [s,e]=clampTo(s,e);
+    setQuick({date:dateISO,start:m2t(s),end:m2t(e), user: user?.name || ''});
+  }
+
+  // Instruments (admin) — 只處理 name
   async function onAddInstrument(){
     if(!user?.isAdmin) return;
     const name=prompt("Instrument name:"); if(!name) return;
-    const location=prompt("Location (optional):")||"";
-    const color=prompt("Color hex (e.g. #a78bfa):")||"#a78bfa";
-    const max=Number(prompt("Max minutes per booking (e.g. 240):")||"0")||0;
-    const r=await apiUpsertInstrument(user.email,{name,location,color,maxMinutes:max});
+    const r=await apiUpsertInstrument(user.email,{name});
     if(!r.ok){ setToast({t:"error",m:"Failed to add instrument."}); return; }
     await loadInstruments(); setToast({t:"ok",m:"Instrument added."});
   }
   async function onEditInstrument(){
     if(!user?.isAdmin || !instr) return;
     const name=prompt("Instrument name:", instr.name); if(!name) return;
-    const location=prompt("Location:", instr.location||"")||"";
-    const color=prompt("Color hex:", instr.color||"#a78bfa")||"#a78bfa";
-    const max=Number(prompt("Max minutes:", instr.maxMinutes||0)||"0")||0;
-    const r=await apiUpsertInstrument(user.email,{id:instr.id,name,location,color,maxMinutes:max});
+    const r=await apiUpsertInstrument(user.email,{id:instr.id,name});
     if(!r.ok){ setToast({t:"error",m:"Failed to update."}); return; }
     await loadInstruments(); setToast({t:"ok",m:"Instrument updated."});
   }
@@ -214,9 +250,10 @@ function App(){
   return (
     <div className="min-h-screen">
       <header className="bg-white border-b sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-bold">BGCP_lab appointment system</h1>
-          <div className="ml-auto flex items-center gap-2">
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {!user ? (
               <>
                 <button className="px-3 py-1 border rounded" onClick={register}>Register</button>
@@ -225,7 +262,7 @@ function App(){
               </>
             ) : (
               <>
-                <span className="text-sm text-slate-600">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
+                <span className="text-sm text-slate-600 mr-2">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
                 {user.isAdmin && (
                   <>
                     <button className="px-3 py-1 border rounded" onClick={onAddInstrument}>Add instrument</button>
@@ -236,7 +273,10 @@ function App(){
                 <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>
               </>
             )}
-            <select className="px-2 py-1 border rounded" value={selected} onChange={e=>setSelected(e.target.value)}>
+
+            {/* 手機可換行：小螢幕寬度 100%，較大螢幕自動縮回 */}
+            <select className="px-2 py-1 border rounded w-full sm:w-auto min-w-[8rem]"
+                    value={selected} onChange={e=>setSelected(e.target.value)}>
               {instruments.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           </div>
@@ -260,7 +300,7 @@ function App(){
             <div className="p-2 text-center text-slate-500">Time</div>
             {weekDates.map((d,idx)=>(
               <div key={idx} className="p-2 text-center font-medium">
-                <div className="text-slate-500 text-xs">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]}</div>
+                <div className="text-slate-500 text-xs">{weekdays[d.getDay()]}</div>
                 <div>{fmtDate(d)}</div>
               </div>
             ))}
@@ -285,7 +325,7 @@ function App(){
                   {hours.map((_,i)=><div key={i} className="h-[64px] border-t"></div>)}
                   <div className="absolute inset-0">
                     {list.map(r=>{
-                      const color=(instruments.find(i=>i.id===r.instrumentId)?.color)||"#6366f1";
+                      const color=colorFromId(r.instrumentId);
                       const top=((t2m(r.start)-DAY_START_MIN)/60)*ROW_H;
                       const h=((t2m(r.end)-t2m(r.start))/60)*ROW_H;
                       return (
@@ -295,7 +335,7 @@ function App(){
                           <div>{r.start}–{r.end} · {r.userName||r.userEmail?.split("@")[0]}</div>
                           {user && <div className="mt-1">
                             <button className="px-2 py-0.5 border rounded bg-white/20"
-                              onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id, r.userEmail);}}>
+                              onClick={(ev)=>{ev.stopPropagation(); removeReservation(r.id);}}>
                               Delete
                             </button>
                           </div>}
@@ -310,6 +350,7 @@ function App(){
         </div>
       </main>
 
+      {/* Quick create dialog */}
       {quick && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={()=>setQuick(null)}>
           <div className="bg-white rounded-2xl w-full max-w-lg p-4" onClick={(e)=>e.stopPropagation()}>
@@ -319,25 +360,33 @@ function App(){
             </div>
             <div className="space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-2">
-                <div><label className="text-xs text-slate-600">Date</label>
-                  <input type="date" className="w-full px-2 py-1 border rounded" value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
+                <div>
+                  <label className="text-xs text-slate-600">Date</label>
+                  <input type="date" className="w-full px-2 py-1 border rounded"
+                         value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className="text-xs text-slate-600">Start</label>
-                    <input type="time" className="w-full px-2 py-1 border rounded" value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
+                  <div>
+                    <label className="text-xs text-slate-600">Start</label>
+                    <input type="time" lang="en-GB" step="900" className="w-full px-2 py-1 border rounded"
+                           value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
                   </div>
-                  <div><label className="text-xs text-slate-600">End</label>
-                    <input type="time" className="w-full px-2 py-1 border rounded" value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
+                  <div>
+                    <label className="text-xs text-slate-600">End</label>
+                    <input type="time" lang="en-GB" step="900" className="w-full px-2 py-1 border rounded"
+                           value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
                   </div>
                 </div>
               </div>
-              <div><label className="text-xs text-slate-600">User</label>
-                <input className="w-full px-2 py-1 border rounded" value={quick.user|| (user?.name||"") } onChange={e=>setQuick({...quick,user:e.target.value})} />
+              <div>
+                <label className="text-xs text-slate-600">User</label>
+                <input className="w-full px-2 py-1 border rounded" value={quick.user||''}
+                       onChange={e=>setQuick({...quick,user:e.target.value})} />
               </div>
               <div className="pt-2 flex items-center gap-2">
                 <button className="px-3 py-2 border rounded bg-slate-900 text-white"
-                  onClick={()=> quick.user && addReservation({...quick, user:quick.user})}
-                  disabled={!quick?.user}>
+                        onClick={()=> quick.user && addReservation(quick)}
+                        disabled={!quick?.user || !quick?.date || !quick?.start || !quick?.end}>
                   Create
                 </button>
               </div>

@@ -17,7 +17,7 @@
 /** ===== Config ===== **/
 const GAS_WEBAPP_URL =
   new URL(location.href).searchParams.get("gas")
-  || "<<<https://script.google.com/macros/s/AKfycbxWM8hGAxK-eDR0d-CF20vCY-vUFawYxmBTjtZXDznjcGhoc2DMHLoWtA73NnAVaNv9bQ/exec>>>";  // ← 換成你最新部署的 URL
+  || "<<<https://script.google.com/macros/s/AKfycbxZuyoVrIqGQxeIX-j6jE4QPIPj3u4ZjVPVOUI7_a0LBdq7jkFR1RvNvBxgpw-AE75jKw/exec>>>";  // ← 換成你最新部署的 URL
 
 const { useEffect, useMemo, useState } = React;
 
@@ -48,9 +48,21 @@ async function apiGetUserFromSheet(email){
   const res = await fetch(url); return res.json().catch(()=>null);
 }
 async function apiRegisterToSheet({name,email,password}){
-  const salt=randomSalt(); const hash=await sha256Hex(password+":"+salt);
-  const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"register",name,email,salt,hash})});
-  return res.json().catch(()=>({ok:false}));
+  try{
+    const salt = randomSalt();
+    const hash = await sha256Hex(password + ":" + salt);
+    const res  = await fetch(GAS_WEBAPP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action:"register", name, email, salt, hash })
+    });
+    const data = await res.json();
+    console.log("[register] status:", res.status, "data:", data);
+    return data; // 期望 {ok:true, isAdmin:true/false}
+  }catch(e){
+    console.error("[register] fetch error:", e);
+    return { ok:false, error:String(e) };
+  }
 }
 async function apiRequestReset(email){
   const res=await fetch(GAS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"request_reset",email})});
@@ -157,15 +169,22 @@ function App(){
 
   // Auth
   async function register(){
-    const emailRaw=prompt("Register Email:"); if(!emailRaw) return;
-    const email=emailRaw.trim().toLowerCase();
-    const name=(prompt("Name:")||email.split("@")[0]).trim();
-    const password=(prompt("Set password:")||"admin").trim();
-    const r=await apiRegisterToSheet({name,email,password});
-    if(!r.ok){ setToast({t:"error",m:"Failed to write to Google Sheet."}); return; }
-    setUser(null);
-    setToast({t:"ok",m:"Registration successful. Please sign in."});
+    const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
+    const email    = emailRaw.trim().toLowerCase();
+    const name     = (prompt("Name:") || email.split("@")[0]).trim();
+    const password = (prompt("Set password:") || "admin").trim();
+
+    const r = await apiRegisterToSheet({ name, email, password });
+
+    if (r && r.ok === true) {
+      setUser(null);
+      setToast({ t:"ok", m:"Registration successful. Please sign in." });
+    } else {
+      const reason = r?.reason || r?.error || "unknown";
+      setToast({ t:"error", m:"Failed to write to Google Sheet. (" + reason + ")" });
+    }
   }
+
   async function login(){
     const email=String(prompt("Email:")||"").trim().toLowerCase();
     const password=String(prompt("Password:")||"").trim();

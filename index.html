@@ -2,15 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BGCP_lab appointment system</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-      html, body, #root { height: 100%; }
-    </style>
+    <style>html, body, #root { height: 100%; }</style>
   </head>
   <body class="bg-slate-50">
     <div id="root"></div>
@@ -18,41 +16,29 @@
     <script type="text/babel" data-presets="env,react">
 /** ===== Config ===== **/
 const GAS_WEBAPP_URL =
-  new URL(location.href).searchParams.get("gas") ||
-  "https://script.google.com/macros/s/AKfycby2i61OY_kDq6NPqDob8NCXLyRgaxBFezX-l9veWxhTAQ-5Zdkxl7FS-l5xGHDhiE7RDA/exec"; // ← 替換成你的 Web App URL
+  new URL(location.href).searchParams.get("gas")
+  || "<<<https://script.google.com/macros/s/AKfycbxWM8hGAxK-eDR0d-CF20vCY-vUFawYxmBTjtZXDznjcGhoc2DMHLoWtA73NnAVaNv9bQ/exec>>>";  // ← 換成你最新部署的 URL
 
 const { useEffect, useMemo, useState } = React;
 
 /** ===== utils ===== **/
-const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
-const fmtDate=(d)=>{d=new Date(d);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
-const t2m=(t)=>{const [h,m]=String(t).split(":").map(Number);return h*60+m};
-const m2t=(m)=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
-const isOverlap=(a1,a2,b1,b2)=>a1<b2 && b1<a2;
-const roundTo=(x,s=15)=>Math.round(x/s)*s;
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const pad2 = n => String(n).padStart(2, "0");
+const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; };
+const t2m = (t) => { const [h,m]=String(t).slice(0,5).split(":").map(Number); return (h*60+m)|0; };
+const m2t = (m) => `${pad2(Math.floor(m/60))}:${pad2(m%60)}`;
+const isOverlap = (a1,a2,b1,b2)=>a1<b2 && b1<a2;
+const roundTo = (x, s=15)=>Math.round(x/s)*s;
 const DAY_START_MIN=0, DAY_END_MIN=24*60, ROW_H=64;
 const clampTo=(a,b,min=DAY_START_MIN,max=DAY_END_MIN)=>[Math.max(min,a),Math.min(max,b)];
 function getWeekStart(date){const d=new Date(date);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);return d;}
 function weakHash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
 
-// 24h 正規化：避免瀏覽器顯示 AM/PM 造成後端不認得
-const normDate = (s) => String(s).trim().replaceAll('/', '-').slice(0, 10);
-const normTime = (s) => {
-  const t = String(s).replace(/[^\d:]/g, ''); // 去掉「上午/下午」等字
-  if (!t.includes(':')) return '';
-  const [hh, mm] = t.split(':');
-  return `${String(hh).padStart(2,'0').slice(0,2)}:${String(mm||'00').padStart(2,'0').slice(0,2)}`;
-};
-
-// 給沒有 color 的儀器一個可預期的顏色
-function colorFromId(id){
-  const palette = ['#7c3aed','#2563eb','#059669','#16a34a','#db2777','#ea580c','#0891b2'];
-  const n = [...String(id||'')].reduce((a,c)=>a+c.charCodeAt(0),0);
-  return palette[n % palette.length];
-}
-
 /** ===== crypto for users ===== **/
-async function sha256Hex(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("")}
+async function sha256Hex(str){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
 function randomSalt(n=16){const a=new Uint8Array(n);crypto.getRandomValues(a);return [...a].map(b=>b.toString(16).padStart(2,"0")).join("")}
 
 /** ===== GAS API ===== **/
@@ -96,7 +82,11 @@ async function apiDeleteInstrument(requester, id){
 
 // Reservations
 async function apiListReservations(fromISO,toISO,instrumentId){
-  const u=new URL(GAS_WEBAPP_URL);u.searchParams.set("action","list_reservations");u.searchParams.set("from",fromISO);u.searchParams.set("to",toISO);if(instrumentId)u.searchParams.set("instrumentId",instrumentId);
+  const u=new URL(GAS_WEBAPP_URL);
+  u.searchParams.set("action","list_reservations");
+  u.searchParams.set("from",fromISO);
+  u.searchParams.set("to",toISO);
+  if(instrumentId) u.searchParams.set("instrumentId",instrumentId);
   const res=await fetch(u); return res.json().catch(()=>[]);
 }
 async function apiCreateReservation(requester,resv){
@@ -122,26 +112,45 @@ function App(){
   const weekDates=useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
   const weekRange=useMemo(()=>({from:fmtDate(weekStart), to:fmtDate(new Date(weekStart.getTime()+6*86400000))}),[weekStart]);
   const weekdays=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
   const instr = instruments.find(i=>i.id===selected)||null;
 
   // Data loaders
   async function loadInstruments(){
-    const data=await apiListInstruments(); setInstruments(data||[]);
-    if(!selected && data?.length) setSelected(data[0].id);
+    const data=await apiListInstruments();
+    setInstruments(data||[]);
+    if(!selected && data?.length) setSelected(String(data[0].id));
   }
+
   async function loadReservations(){
-    const data=await apiListReservations(weekRange.from,weekRange.to, null);
-    setReservations(data||[]);
+    const raw = await apiListReservations(weekRange.from,weekRange.to,null);
+
+    // 正規化（避免 Date 物件或 "HH:mm:ss" 對不到）
+    const toDateStr = (v) => {
+      if (v instanceof Date) return new Date(v).toISOString().slice(0,10);
+      const s = String(v);
+      return s.includes("T") ? s.slice(0,10) : s.slice(0,10);
+    };
+    const toTimeStr = (v) => String(v).slice(0,5);
+
+    const data = (raw||[]).map(r=>({
+      ...r,
+      instrumentId: String(r.instrumentId || ""),
+      date:  toDateStr(r.date),
+      start: toTimeStr(r.start),
+      end:   toTimeStr(r.end),
+    }));
+
+    setReservations(data);
   }
+
   useEffect(()=>{ loadInstruments(); },[]);
   useEffect(()=>{ loadReservations(); },[weekRange.from,weekRange.to]);
 
   // Derived
   const mapByDate=useMemo(()=>{
     const m={};
-    for(const r of reservations){
-      (m[r.date]=m[r.date]||[]).push(r);
-    }
+    for(const r of reservations){ (m[r.date]=m[r.date]||[]).push(r); }
     for(const k in m) m[k].sort((a,b)=>a.start.localeCompare(b.start));
     return m;
   },[reservations]);
@@ -179,50 +188,28 @@ function App(){
 
   // Bookings
   async function addReservation(r){
-    if(!user) return setToast({t:'error',m:'Please sign in first.'});
-
-    const payload = {
-      instrumentId: selected,
-      date:  normDate(r.date),
-      start: normTime(r.start),
-      end:   normTime(r.end),
-      userEmail: user.email,
-      userName:  r.user || user.name || user.email.split('@')[0],
-    };
-    if(!payload.date || !payload.start || !payload.end){
-      return setToast({t:'error', m:'Please fill date, start and end.'});
-    }
-    if(payload.start >= payload.end){
-      return setToast({t:'error', m:'End time must be after start time.'});
-    }
-
+    if(!user) return setToast({t:"error",m:"Please sign in first."});
+    const payload={instrumentId:selected,date:r.date,start:r.start,end:r.end,userEmail:user.email,userName:(r.user||user.name||"")};
     const res=await apiCreateReservation(user.email,payload);
-    if(!res.ok){
-      const msg = res.reason === 'conflict'
-        ? 'Time conflict. Pick another slot.'
-        : `Failed to create${res.reason ? ' ('+res.reason+')' : ''}.`;
-      return setToast({t:'error', m: msg});
-    }
-    await loadReservations();
-    setQuick(null);
-    setToast({t:'ok',m:'Booking created.'});
+    if(!res.ok){ setToast({t:"error",m:res.reason==="conflict"?"Time conflict. Pick another slot.":"Failed to create."}); return; }
+    await loadReservations(); setQuick(null);
+    setToast({t:"ok",m:"Booking created."});
   }
-
   async function removeReservation(id){
     if(!user) return;
     const res=await apiDeleteReservation(user.email,id);
-    if(!res.ok){ setToast({t:'error',m:'Delete failed.'}); return; }
-    await loadReservations(); setToast({t:'ok',m:'Booking removed.'});
+    if(!res.ok){ setToast({t:"error",m:"Delete failed."}); return; }
+    await loadReservations();
+    setToast({t:"ok",m:"Booking removed."});
   }
-
   function onCalendarClick({dateISO,yRatio}){
-    if(!selected) return setToast({t:'error',m:'Please select an instrument.'});
-    const minutesFromStart=Math.floor((DAY_END_MIN-DAY_START_MIN)*yRatio);
-    let s=roundTo(DAY_START_MIN+minutesFromStart,15), e=s+60; [s,e]=clampTo(s,e);
-    setQuick({date:dateISO,start:m2t(s),end:m2t(e), user: user?.name || ''});
+    if(!selected) return setToast({t:"error",m:"Please select an instrument."});
+    const minutes=Math.floor((DAY_END_MIN-DAY_START_MIN)*yRatio);
+    let s=roundTo(DAY_START_MIN+minutes,15), e=s+60; [s,e]=clampTo(s,e);
+    setQuick({date:dateISO,start:m2t(s),end:m2t(e),user:user?.name||""});
   }
 
-  // Instruments (admin) — 只處理 name
+  // Instruments (admin) — 僅維持名稱增修，其他欄位留空
   async function onAddInstrument(){
     if(!user?.isAdmin) return;
     const name=prompt("Instrument name:"); if(!name) return;
@@ -252,7 +239,6 @@ function App(){
       <header className="bg-white border-b sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-bold">BGCP_lab appointment system</h1>
-
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {!user ? (
               <>
@@ -262,7 +248,7 @@ function App(){
               </>
             ) : (
               <>
-                <span className="text-sm text-slate-600 mr-2">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
+                <span className="text-sm text-slate-600">{user.name} · {user.email} {user.isAdmin && "(admin)"}</span>
                 {user.isAdmin && (
                   <>
                     <button className="px-3 py-1 border rounded" onClick={onAddInstrument}>Add instrument</button>
@@ -273,9 +259,7 @@ function App(){
                 <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>
               </>
             )}
-
-            {/* 手機可換行：小螢幕寬度 100%，較大螢幕自動縮回 */}
-            <select className="px-2 py-1 border rounded w-full sm:w-auto min-w-[8rem]"
+            <select className="px-2 py-1 border rounded max-w-full"
                     value={selected} onChange={e=>setSelected(e.target.value)}>
               {instruments.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
@@ -309,14 +293,14 @@ function App(){
             <div className="border-r bg-slate-50 select-none">
               {hours.map(h=>(
                 <div key={h} className="h-[64px] border-t px-2 py-1 text-right text-slate-500">
-                  {String(h).padStart(2,'0')}:00
+                  {pad2(h)}:00
                 </div>
               ))}
             </div>
 
             {weekDates.map((d,idx)=>{
               const dateISO=fmtDate(d);
-              const list=(mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
+              const list=(mapByDate[dateISO]||[]).filter(r=>!selected || String(r.instrumentId)===String(selected));
               return (
                 <div key={idx} className="border-l relative cursor-crosshair" onClick={(e)=>{
                   const rect=e.currentTarget.getBoundingClientRect(); const y=e.clientY-rect.top; const ratio=Math.max(0,Math.min(1,y/rect.height));
@@ -325,7 +309,7 @@ function App(){
                   {hours.map((_,i)=><div key={i} className="h-[64px] border-t"></div>)}
                   <div className="absolute inset-0">
                     {list.map(r=>{
-                      const color=colorFromId(r.instrumentId);
+                      const color="#7c3aed"; // 簡化：統一色
                       const top=((t2m(r.start)-DAY_START_MIN)/60)*ROW_H;
                       const h=((t2m(r.end)-t2m(r.start))/60)*ROW_H;
                       return (
@@ -363,30 +347,38 @@ function App(){
                 <div>
                   <label className="text-xs text-slate-600">Date</label>
                   <input type="date" className="w-full px-2 py-1 border rounded"
-                         value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
+                         value={quick.date}
+                         onChange={e=>setQuick({...quick,date:e.target.value})} />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs text-slate-600">Start</label>
-                    <input type="time" lang="en-GB" step="900" className="w-full px-2 py-1 border rounded"
-                           value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
+                    <input type="time" lang="en-GB" step="60" inputMode="numeric" pattern="[0-2][0-9]:[0-5][0-9]"
+                           placeholder="HH:mm"
+                           className="w-full px-2 py-1 border rounded"
+                           value={quick.start}
+                           onChange={e=>setQuick({...quick,start:e.target.value.slice(0,5)})} />
                   </div>
                   <div>
                     <label className="text-xs text-slate-600">End</label>
-                    <input type="time" lang="en-GB" step="900" className="w-full px-2 py-1 border rounded"
-                           value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
+                    <input type="time" lang="en-GB" step="60" inputMode="numeric" pattern="[0-2][0-9]:[0-5][0-9]"
+                           placeholder="HH:mm"
+                           className="w-full px-2 py-1 border rounded"
+                           value={quick.end}
+                           onChange={e=>setQuick({...quick,end:e.target.value.slice(0,5)})} />
                   </div>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-slate-600">User</label>
-                <input className="w-full px-2 py-1 border rounded" value={quick.user||''}
+                <input className="w-full px-2 py-1 border rounded"
+                       value={quick.user||""}
                        onChange={e=>setQuick({...quick,user:e.target.value})} />
               </div>
               <div className="pt-2 flex items-center gap-2">
                 <button className="px-3 py-2 border rounded bg-slate-900 text-white"
                         onClick={()=> quick.user && addReservation(quick)}
-                        disabled={!quick?.user || !quick?.date || !quick?.start || !quick?.end}>
+                        disabled={!quick?.user}>
                   Create
                 </button>
               </div>

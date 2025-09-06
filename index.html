@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en-GB"> <!-- en-GB 會讓 <input type="time"> 以 24h 顯示 -->
+<html lang="en-GB">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,8 +13,7 @@
 
     <style>
       html, body, #root { height: 100%; }
-      /* 更清楚的點按區域 */
-      .cell-hr { height: 64px; } /* 每小時行高 */
+      .cell-hr { height: 64px; }
       @media (max-width: 640px) {
         .cell-hr { height: 56px; }
       }
@@ -25,11 +24,11 @@
 
     <script type="text/babel" data-presets="env,react">
       /***** ==== Config ==== *****/
-      const GAS_WEBAPP_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwWkWM29HkPAQrTEGWl_EbVKnkrtAUAyWacnSVBPiqS7Dalwb4cIB62Nt8te0x4tELLKA/exec"; // ← 換成你「最新部署」的 Web App URL
+      const GAS_WEBAPP_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwRbV98Rt8bBYyX25voF_Qs2aHWE7cqhgr9TnV5_0iGX3HshHk-WHQ5ERxj2Pr-Y3SM_A/exec";
       const GAS_WEBAPP_URL =
         new URL(location.href).searchParams.get("gas") || GAS_WEBAPP_URL_DEFAULT;
 
-      const { useEffect, useMemo, useState } = React;
+      const { useEffect, useMemo, useState, useRef } = React;
 
       /***** ==== utils ==== *****/
       const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -40,11 +39,10 @@
       const isOverlap = (a1,a2,b1,b2)=>a1<b2 && b1<a2;
       function getWeekStart(date){
         const d = new Date(date);
-        d.setDate(d.getDate() - d.getDay()); // 回到星期日
+        d.setDate(d.getDate() - d.getDay());
         d.setHours(0,0,0,0);
         return d;
       }
-      // crypto for users
       async function sha256Hex(str){
         const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
         return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
@@ -93,7 +91,7 @@
         const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","list_instruments");
         const res = await fetch(u); return res.json().catch(()=>[]);
       }
-      async function apiUpsertInstrument(requester, instrument){ // 只用 name
+      async function apiUpsertInstrument(requester, instrument){
         const res = await fetch(GAS_WEBAPP_URL, {
           method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
           body: JSON.stringify({ action:"upsert_instrument", requester, instrument })
@@ -109,7 +107,7 @@
       }
 
       // Reservations
-      async function apiListReservations(fromISO,toISO,instrumentId){
+      async function apiListReservations(fromISO,toISO,instrumentId){ // CHANGED: 加 instrumentId
         const u = new URL(GAS_WEBAPP_URL);
         u.searchParams.set("action","list_reservations");
         u.searchParams.set("from", fromISO);
@@ -134,7 +132,6 @@
 
       /***** ==== App ==== *****/
       function App(){
-        // UI state
         const [instruments,setInstruments] = useState([]);
         const [selected,setSelected]       = useState("");
         const [reservations,setReservations] = useState([]);
@@ -142,8 +139,9 @@
         const [toast,setToast]             = useState(null);
         const [quick,setQuick]             = useState(null); // {date,start,end,user?}
         const [user,setUser]               = useState(null);
+        const [busy,setBusy]               = useState(false); // NEW: 用在 Create 鎖定
+        const pollRef = useRef(null);                         // NEW: 輪詢計時器
 
-        // derived
         const weekDates = useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
         const weekRange = useMemo(()=>({from:fmtDate(weekStart), to:fmtDate(new Date(weekStart.getTime()+6*86400000))}),[weekStart]);
         const weekdays  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -156,12 +154,20 @@
           if(!selected && Array.isArray(data) && data.length) setSelected(data[0].id);
         }
         async function loadReservations(){
-          const data = await apiListReservations(weekRange.from, weekRange.to, null);
+          // CHANGED: 只抓當前儀器 + 當週
+          const data = await apiListReservations(weekRange.from, weekRange.to, selected || "");
           setReservations(Array.isArray(data)?data:[]);
         }
 
         useEffect(()=>{ loadInstruments(); },[]);
-        useEffect(()=>{ loadReservations(); },[weekRange.from, weekRange.to]);
+        useEffect(()=>{ if(selected) loadReservations(); },[weekRange.from, weekRange.to, selected]); // CHANGED: selected 變更就重抓
+
+        // NEW: 每 15 秒輪詢與 Sheet 同步
+        useEffect(()=>{
+          if(pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = setInterval(()=>{ if(selected) loadReservations(); }, 15000);
+          return ()=> { if(pollRef.current) clearInterval(pollRef.current); };
+        },[selected, weekRange.from, weekRange.to]);
 
         const mapByDate = useMemo(()=>{
           const m = {};
@@ -176,10 +182,18 @@
         async function register(){
           const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
           const email = emailRaw.trim().toLowerCase();
+          const exist = await apiGetUserFromSheet(email);              // NEW: 前端先查重
+          if(exist && exist.email){
+            setToast({t:"error",m:"This email is already registered. Please sign in or use Forgot password."});
+            return;
+          }
           const name  = (prompt("Name:") || email.split("@")[0]).trim();
           const pw    = (prompt("Set password:") || "admin").trim();
           const r = await apiRegisterToSheet({name,email,password:pw});
-          if(!r?.ok){ setToast({t:"error",m:"Failed to write to Google Sheet."}); return; }
+          if(!r?.ok){
+            const msg = r?.reason==="exists" ? "This email is already registered." : "Failed to write to Google Sheet.";
+            setToast({t:"error",m:msg}); return;
+          }
           setUser(null);
           setToast({t:"ok",m:"Registration successful. Please sign in."});
         }
@@ -203,23 +217,48 @@
           setToast({t:"ok",m:"Password reset. Please sign in with the new password."});
         }
 
+        // helper: 取某天、某儀器的清單
+        const listFor = (dateISO) => (mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
+
         // bookings
+        function hasConflictLocal(date, start, end){ // NEW: 前端檢查
+          const a1 = t2m(start), a2 = t2m(end);
+          for(const r of listFor(date)){
+            const b1 = t2m(r.start), b2 = t2m(r.end);
+            if(isOverlap(a1,a2,b1,b2)) return true;
+          }
+          return false;
+        }
+
         async function addReservation(r){
           if(!user) return setToast({t:"error",m:"Please sign in first."});
+          if(!selected) return setToast({t:"error",m:"Please select an instrument."});
+
+          // 前端本地衝突檢查（雙重保護）
+          if(hasConflictLocal(r.date, r.start, r.end)){
+            setToast({t:"error",m:"Time conflict. Pick another slot."});
+            return;
+          }
+
+          setBusy(true); // NEW: 鎖定按鈕，避免重複送出
           const payload = {
             instrumentId: selected,
             date: r.date, start: r.start, end: r.end,
             userEmail: user.email, userName: r.user || user.name
           };
           const res = await apiCreateReservation(user.email, payload);
+          setBusy(false);
+
           if(!res?.ok){
             const msg = res?.reason==="conflict" ? "Time conflict. Pick another slot." : "Failed to write to Google Sheet.";
-            setToast({t:"error",m:msg}); return;
+            setToast({t:"error",m:msg});
+            return;
           }
           await loadReservations();
-          setQuick(null);
+          setQuick(null); // 成功後關閉視窗
           setToast({t:"ok",m:"Booking created."});
         }
+
         async function removeReservation(id){
           if(!user) return;
           const r = await apiDeleteReservation(user.email, id);
@@ -227,6 +266,7 @@
           await loadReservations();
           setToast({t:"ok",m:"Booking removed."});
         }
+
         function onCalendarClick({dateISO,yRatio}){
           if(!selected) return setToast({t:"error",m:"Please select an instrument."});
           const minutesFromStart = Math.floor((24*60) * yRatio);
@@ -315,6 +355,7 @@
                     <button onClick={()=>setWeekStart(d=>new Date(d.getTime()+7*86400000))} className="px-3 py-1 hover:bg-slate-100">Next →</button>
                     <button onClick={()=>setWeekStart(getWeekStart(new Date()))} className="px-3 py-1 hover:bg-slate-100">This week</button>
                   </div>
+                  <button className="ml-auto px-3 py-1 border rounded" onClick={loadReservations}>Refresh</button> {/* NEW: 手動刷新 */}
                 </div>
               </div>
             </header>
@@ -345,7 +386,7 @@
                   {/* days */}
                   {weekDates.map((d,idx)=>{
                     const dateISO = fmtDate(d);
-                    const list = (mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
+                    const list = listFor(dateISO);
                     return (
                       <div
                         key={idx}
@@ -393,40 +434,46 @@
 
             {/* Quick create dialog */}
             {quick && (
-              <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={()=>setQuick(null)}>
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4" onClick={()=>!busy && setQuick(null)}>
                 <div className="bg-white rounded-2xl w-full max-w-lg p-4" onClick={(e)=>e.stopPropagation()}>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-semibold">New booking</h3>
-                    <button className="px-2 py-1 text-sm border rounded" onClick={()=>setQuick(null)}>Close</button>
+                    <button className="px-2 py-1 text-sm border rounded disabled:opacity-50" onClick={()=>setQuick(null)} disabled={busy}>Close</button>
                   </div>
                   <div className="space-y-3 text-sm">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <label className="text-xs text-slate-600">Date</label>
-                        <input type="date" className="w-full px-2 py-1 border rounded" value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} />
+                        <input type="date" className="w-full px-2 py-1 border rounded" value={quick.date} onChange={e=>setQuick({...quick,date:e.target.value})} disabled={busy}/>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-xs text-slate-600">Start</label>
-                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} />
+                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.start} onChange={e=>setQuick({...quick,start:e.target.value})} disabled={busy}/>
                         </div>
                         <div>
                           <label className="text-xs text-slate-600">End</label>
-                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} />
+                          <input type="time" step="900" className="w-full px-2 py-1 border rounded" value={quick.end} onChange={e=>setQuick({...quick,end:e.target.value})} disabled={busy}/>
                         </div>
                       </div>
                     </div>
                     <div>
                       <label className="text-xs text-slate-600">User</label>
-                      <input className="w-full px-2 py-1 border rounded" value={quick.user||""} onChange={e=>setQuick({...quick,user:e.target.value})} />
+                      <input className="w-full px-2 py-1 border rounded" value={quick.user||""} onChange={e=>setQuick({...quick,user:e.target.value})} disabled={busy}/>
                     </div>
+
+                    {/* NEW: 即時衝突提示 */}
+                    {quick?.date && quick?.start && quick?.end && hasConflictLocal(quick.date, quick.start, quick.end) && (
+                      <div className="text-rose-600">This time overlaps with an existing booking.</div>
+                    )}
+
                     <div className="pt-2 flex items-center gap-2">
                       <button
                         className="px-3 py-2 border rounded bg-slate-900 text-white disabled:opacity-50"
                         onClick={()=> quick.user && addReservation({...quick})}
-                        disabled={!quick.user}
+                        disabled={!quick.user || busy || (quick?.date && quick?.start && quick?.end && hasConflictLocal(quick.date, quick.start, quick.end))}
                       >
-                        Create
+                        {busy ? "Creating..." : "Create"}
                       </button>
                     </div>
                   </div>

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>BGCP_lab appointment system</title>
 
-    <!-- UI libs -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -23,14 +22,12 @@
     <div id="root"></div>
 
     <script type="text/babel" data-presets="env,react">
-      /***** ==== Config ==== *****/
-      const GAS_WEBAPP_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwRbV98Rt8bBYyX25voF_Qs2aHWE7cqhgr9TnV5_0iGX3HshHk-WHQ5ERxj2Pr-Y3SM_A/exec";
+      const GAS_WEBAPP_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbzW7VnHZttj7I-VPyNEp0R2MGharbAM2OsyijYO-wW4e8tZPMtPNYC1gfHz5-86-h3rFA/exec";
       const GAS_WEBAPP_URL =
         new URL(location.href).searchParams.get("gas") || GAS_WEBAPP_URL_DEFAULT;
 
       const { useEffect, useMemo, useState, useRef } = React;
 
-      /***** ==== utils ==== *****/
       const fmtDate = (d) => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
       const t2m = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60 + (m||0); };
       const m2t = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
@@ -49,12 +46,7 @@
       }
       function randomSalt(n=16){ const a=new Uint8Array(n); crypto.getRandomValues(a); return [...a].map(b=>b.toString(16).padStart(2,"0")).join(""); }
 
-      /***** ==== GAS API ==== *****/
-      // Users
-      async function apiPing(){
-        const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","ping");
-        try { const r = await fetch(u); return r.json(); } catch{ return null; }
-      }
+      // ===== GAS API =====
       async function apiGetUserFromSheet(email){
         const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","getUser"); u.searchParams.set("email", email);
         const res = await fetch(u); return res.json().catch(()=>null);
@@ -85,8 +77,6 @@
         });
         return res.json().catch(()=>({ok:false}));
       }
-
-      // Instruments
       async function apiListInstruments(){
         const u = new URL(GAS_WEBAPP_URL); u.searchParams.set("action","list_instruments");
         const res = await fetch(u); return res.json().catch(()=>[]);
@@ -105,9 +95,7 @@
         });
         return res.json().catch(()=>({ok:false}));
       }
-
-      // Reservations
-      async function apiListReservations(fromISO,toISO,instrumentId){ // CHANGED: 加 instrumentId
+      async function apiListReservations(fromISO,toISO,instrumentId){
         const u = new URL(GAS_WEBAPP_URL);
         u.searchParams.set("action","list_reservations");
         u.searchParams.set("from", fromISO);
@@ -130,7 +118,6 @@
         return res.json().catch(()=>({ok:false}));
       }
 
-      /***** ==== App ==== *****/
       function App(){
         const [instruments,setInstruments] = useState([]);
         const [selected,setSelected]       = useState("");
@@ -139,42 +126,43 @@
         const [toast,setToast]             = useState(null);
         const [quick,setQuick]             = useState(null); // {date,start,end,user?}
         const [user,setUser]               = useState(null);
-        const [busy,setBusy]               = useState(false); // NEW: 用在 Create 鎖定
-        const pollRef = useRef(null);                         // NEW: 輪詢計時器
+        const [busy,setBusy]               = useState(false);
+        const pollRef = useRef(null);
 
         const weekDates = useMemo(()=>Array.from({length:7},(_,i)=>new Date(weekStart.getTime()+i*86400000)),[weekStart]);
         const weekRange = useMemo(()=>({from:fmtDate(weekStart), to:fmtDate(new Date(weekStart.getTime()+6*86400000))}),[weekStart]);
         const weekdays  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
         const hours     = Array.from({length:24},(_,i)=>i);
 
-        // load data
         async function loadInstruments(){
           const data = await apiListInstruments();
           setInstruments(Array.isArray(data)?data:[]);
           if(!selected && Array.isArray(data) && data.length) setSelected(data[0].id);
         }
         async function loadReservations(){
-          // CHANGED: 只抓當前儀器 + 當週
           const data = await apiListReservations(weekRange.from, weekRange.to, selected || "");
           setReservations(Array.isArray(data)?data:[]);
         }
 
         useEffect(()=>{ loadInstruments(); },[]);
-        useEffect(()=>{ if(selected) loadReservations(); },[weekRange.from, weekRange.to, selected]); // CHANGED: selected 變更就重抓
-
-        // NEW: 每 15 秒輪詢與 Sheet 同步
+        useEffect(()=>{ if(selected) loadReservations(); },[weekRange.from, weekRange.to, selected]);
         useEffect(()=>{
           if(pollRef.current) clearInterval(pollRef.current);
           pollRef.current = setInterval(()=>{ if(selected) loadReservations(); }, 15000);
           return ()=> { if(pollRef.current) clearInterval(pollRef.current); };
         },[selected, weekRange.from, weekRange.to]);
 
+        // 將清單按「本地日期」分組（後端已回 localDate，但也保險重算）
         const mapByDate = useMemo(()=>{
           const m = {};
           for(const r of reservations){
-            (m[r.date]=m[r.date]||[]).push(r);
+            const d = new Date(r.startISO);
+            const k = fmtDate(d);
+            (m[k]=m[k]||[]).push(r);
           }
-          for(const k in m) m[k].sort((a,b)=>a.start.localeCompare(b.start));
+          for(const k in m){
+            m[k].sort((a,b)=> new Date(a.startISO) - new Date(b.startISO));
+          }
           return m;
         },[reservations]);
 
@@ -182,7 +170,7 @@
         async function register(){
           const emailRaw = prompt("Register Email:"); if(!emailRaw) return;
           const email = emailRaw.trim().toLowerCase();
-          const exist = await apiGetUserFromSheet(email);              // NEW: 前端先查重
+          const exist = await apiGetUserFromSheet(email);
           if(exist && exist.email){
             setToast({t:"error",m:"This email is already registered. Please sign in or use Forgot password."});
             return;
@@ -217,33 +205,42 @@
           setToast({t:"ok",m:"Password reset. Please sign in with the new password."});
         }
 
-        // helper: 取某天、某儀器的清單
         const listFor = (dateISO) => (mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
 
-        // bookings
-        function hasConflictLocal(date, start, end){ // NEW: 前端檢查
-          const a1 = t2m(start), a2 = t2m(end);
-          for(const r of listFor(date)){
-            const b1 = t2m(r.start), b2 = t2m(r.end);
-            if(isOverlap(a1,a2,b1,b2)) return true;
+        function hasConflictLocal(startISO, endISO){
+          const a1 = new Date(startISO).getTime();
+          const a2 = new Date(endISO).getTime();
+          const dayKey = fmtDate(new Date(startISO));
+          for(const r of listFor(dayKey)){
+            const b1 = new Date(r.startISO).getTime();
+            const b2 = new Date(r.endISO).getTime();
+            if(a1 < b2 && b1 < a2) return true;
           }
           return false;
+        }
+
+        function buildISO(dateStr, timeStr){
+          // 將使用者本地的 YYYY-MM-DD + HH:mm 組成 Date，再 toISOString()
+          const d = new Date(`${dateStr}T${timeStr}:00`);
+          return d.toISOString();
         }
 
         async function addReservation(r){
           if(!user) return setToast({t:"error",m:"Please sign in first."});
           if(!selected) return setToast({t:"error",m:"Please select an instrument."});
 
-          // 前端本地衝突檢查（雙重保護）
-          if(hasConflictLocal(r.date, r.start, r.end)){
+          const startISO = buildISO(r.date, r.start);
+          const endISO   = buildISO(r.date, r.end);
+
+          if(hasConflictLocal(startISO, endISO)){
             setToast({t:"error",m:"Time conflict. Pick another slot."});
             return;
           }
 
-          setBusy(true); // NEW: 鎖定按鈕，避免重複送出
+          setBusy(true);
           const payload = {
             instrumentId: selected,
-            date: r.date, start: r.start, end: r.end,
+            startISO, endISO,
             userEmail: user.email, userName: r.user || user.name
           };
           const res = await apiCreateReservation(user.email, payload);
@@ -255,7 +252,7 @@
             return;
           }
           await loadReservations();
-          setQuick(null); // 成功後關閉視窗
+          setQuick(null);
           setToast({t:"ok",m:"Booking created."});
         }
 
@@ -274,39 +271,8 @@
           setQuick({date:dateISO, start:m2t(s), end:m2t(e), user:(user?.name||"")});
         }
 
-        // instruments (admin, only name)
-        async function onAddInstrument(){
-          if(!user?.isAdmin) return;
-          const name = prompt("Instrument name:"); if(!name) return;
-          const r = await apiUpsertInstrument(user.email, { name });
-          if(!r?.ok){ setToast({t:"error",m:"Failed to add instrument."}); return; }
-          await loadInstruments(); setToast({t:"ok",m:"Instrument added."});
-        }
-        async function onEditInstrument(){
-          if(!user?.isAdmin || !selected) return;
-          const current = instruments.find(i=>i.id===selected); if(!current) return;
-          const name = prompt("Instrument name:", current.name); if(!name) return;
-          const r = await apiUpsertInstrument(user.email, { id: current.id, name });
-          if(!r?.ok){ setToast({t:"error",m:"Failed to update instrument."}); return; }
-          await loadInstruments(); setToast({t:"ok",m:"Instrument updated."});
-        }
-        async function onDeleteInstrument(){
-          if(!user?.isAdmin || !selected) return;
-          const current = instruments.find(i=>i.id===selected); if(!current) return;
-          if(!confirm(`Delete instrument "${current.name}" and its reservations?`)) return;
-          const r = await apiDeleteInstrument(user.email, current.id);
-          if(!r?.ok){ setToast({t:"error",m:"Failed to delete instrument."}); return; }
-          await loadInstruments(); await loadReservations();
-          setSelected(prev => {
-            const list = instruments.filter(i=>i.id!==current.id);
-            return list[0]?.id || "";
-          });
-          setToast({t:"ok",m:"Instrument deleted."});
-        }
-
         return (
           <div className="min-h-screen">
-            {/* Header */}
             <header className="bg-white border-b sticky top-0 z-40">
               <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-2">
                 <h1 className="text-xl font-bold mr-auto">BGCP_lab appointment system</h1>
@@ -324,9 +290,13 @@
                     </span>
                     {user.isAdmin && (
                       <div className="flex gap-2 flex-wrap">
-                        <button className="px-3 py-1 border rounded" onClick={onAddInstrument}>Add instrument</button>
-                        <button className="px-3 py-1 border rounded" onClick={onEditInstrument} disabled={!selected}>Edit</button>
-                        <button className="px-3 py-1 border rounded" onClick={onDeleteInstrument} disabled={!selected}>Delete</button>
+                        <button className="px-3 py-1 border rounded" onClick={async ()=>{
+                          const name = prompt("Instrument name:"); if(!name) return;
+                          const r = await apiUpsertInstrument(user.email, { name });
+                          if(!r?.ok) return setToast({t:"error",m:"Failed to add instrument."});
+                          setToast({t:"ok",m:"Instrument added."});
+                          await loadInstruments();
+                        }}>Add instrument</button>
                       </div>
                     )}
                     <button className="px-3 py-1 border rounded" onClick={logout}>Sign out</button>
@@ -344,7 +314,6 @@
                 </select>
               </div>
 
-              {/* Week nav */}
               <div className="bg-slate-50 border-t">
                 <div className="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center gap-2 text-sm">
                   <div className="flex items-center rounded-xl border overflow-hidden">
@@ -355,7 +324,7 @@
                     <button onClick={()=>setWeekStart(d=>new Date(d.getTime()+7*86400000))} className="px-3 py-1 hover:bg-slate-100">Next →</button>
                     <button onClick={()=>setWeekStart(getWeekStart(new Date()))} className="px-3 py-1 hover:bg-slate-100">This week</button>
                   </div>
-                  <button className="ml-auto px-3 py-1 border rounded" onClick={loadReservations}>Refresh</button> {/* NEW: 手動刷新 */}
+                  <button className="ml-auto px-3 py-1 border rounded" onClick={()=>apiListReservations(weekRange.from, weekRange.to, selected).then(d=>setReservations(d))}>Refresh</button>
                 </div>
               </div>
             </header>
@@ -367,14 +336,13 @@
                   <div className="p-2 text-center text-slate-500">Time</div>
                   {weekDates.map((d,idx)=>(
                     <div key={idx} className="p-2 text-center font-medium">
-                      <div className="text-slate-500 text-xs">{weekdays[d.getDay()]}</div>
+                      <div className="text-slate-500 text-xs">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]}</div>
                       <div>{fmtDate(d)}</div>
                     </div>
                   ))}
                 </div>
 
                 <div className="grid grid-cols-8 text-sm">
-                  {/* time column */}
                   <div className="border-r bg-slate-50 select-none">
                     {hours.map(h=>(
                       <div key={h} className="cell-hr border-t px-2 py-1 text-right text-slate-500">
@@ -383,10 +351,9 @@
                     ))}
                   </div>
 
-                  {/* days */}
                   {weekDates.map((d,idx)=>{
                     const dateISO = fmtDate(d);
-                    const list = listFor(dateISO);
+                    const list = (mapByDate[dateISO]||[]).filter(r=>!selected || r.instrumentId===selected);
                     return (
                       <div
                         key={idx}
@@ -401,8 +368,10 @@
                         {hours.map((_,i)=><div key={i} className="cell-hr border-t"></div>)}
                         <div className="absolute inset-0">
                           {list.map(r=>{
-                            const top=((t2m(r.start))/60)*64;
-                            const h  =((t2m(r.end)-t2m(r.start))/60)*64;
+                            const sd = new Date(r.startISO);
+                            const ed = new Date(r.endISO);
+                            const top=((sd.getHours()*60 + sd.getMinutes())/60)*64;
+                            const h  =(((ed - sd)/60000)/60)*64;
                             return (
                               <div
                                 key={r.id}
@@ -410,7 +379,12 @@
                                 style={{top:Math.max(0,top),height:Math.max(24,h),left:4,right:4,background:"#8b5cf6"}}
                               >
                                 <div className="font-semibold truncate">Booked</div>
-                                <div>{r.start}–{r.end} · {r.userName || (r.userEmail||"").split("@")[0]}</div>
+                                <div>
+                                  {String(sd.getHours()).padStart(2,'0')}:{String(sd.getMinutes()).padStart(2,'0')}
+                                  –
+                                  {String(ed.getHours()).padStart(2,'0')}:{String(ed.getMinutes()).padStart(2,'0')}
+                                  · {r.userName || (r.userEmail||"").split("@")[0]}
+                                </div>
                                 {user && (
                                   <div className="mt-1">
                                     <button
@@ -462,16 +436,18 @@
                       <input className="w-full px-2 py-1 border rounded" value={quick.user||""} onChange={e=>setQuick({...quick,user:e.target.value})} disabled={busy}/>
                     </div>
 
-                    {/* NEW: 即時衝突提示 */}
-                    {quick?.date && quick?.start && quick?.end && hasConflictLocal(quick.date, quick.start, quick.end) && (
-                      <div className="text-rose-600">This time overlaps with an existing booking.</div>
-                    )}
+                    {(() => {
+                      if(!(quick?.date&&quick?.start&&quick?.end)) return null;
+                      const s = new Date(`${quick.date}T${quick.start}:00`).toISOString();
+                      const e = new Date(`${quick.date}T${quick.end}:00`).toISOString();
+                      return hasConflictLocal(s,e) && <div className="text-rose-600">This time overlaps with an existing booking.</div>;
+                    })()}
 
                     <div className="pt-2 flex items-center gap-2">
                       <button
                         className="px-3 py-2 border rounded bg-slate-900 text-white disabled:opacity-50"
                         onClick={()=> quick.user && addReservation({...quick})}
-                        disabled={!quick.user || busy || (quick?.date && quick?.start && quick?.end && hasConflictLocal(quick.date, quick.start, quick.end))}
+                        disabled={!quick.user || busy || !(quick?.date&&quick?.start&&quick?.end) || hasConflictLocal(new Date(`${quick.date}T${quick.start}:00`).toISOString(), new Date(`${quick.date}T${quick.end}:00`).toISOString())}
                       >
                         {busy ? "Creating..." : "Create"}
                       </button>
@@ -481,7 +457,6 @@
               </div>
             )}
 
-            {/* Toast */}
             {toast && (
               <div className={`fixed bottom-4 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded ${toast.t==='ok'?'bg-emerald-600':'bg-rose-600'}`}>
                 {toast.m}
